@@ -51,6 +51,11 @@ export const api = {
     return res.data;
   },
 
+  stepSimulation: async () => {
+    const res = await apiClient.post('/simulation/step');
+    return res.data;
+  },
+
   resetSimulation: async () => {
     const res = await apiClient.post('/simulation/reset', { preserve_scenario: true });
     return res.data;

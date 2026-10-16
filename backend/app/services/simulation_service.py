@@ -4,6 +4,7 @@ the SQLite database, and the in-memory SimulationEngine.
 """
 import json
 import os
+import copy
 from typing import Dict, Any, List, Optional
 from backend.app.simulation.engine import SimulationEngine
 from backend.app.simulation.scenarios import DEMO_PATIENTS, DEMO_RESOURCES
@@ -185,35 +186,83 @@ class SimulationService:
         return list(self.engine.patients.values())
 
     def add_emergency_patient(self, patient_data: PatientCreate) -> Dict[str, Any]:
-        """Submit and process a new emergency patient."""
+        """Submit and process a new emergency patient through the complete multi-agent pipeline."""
         p_dict = patient_data.model_dump()
         p_dict["workflow_state"] = "REGISTERED"
         self.engine.patients[p_dict["id"]] = p_dict
 
-        # Process through coordinator
-        env = {
-            "simulation_time": self.engine.current_time,
-            "ambulances": self.engine.ambulances,
-            "doctors": self.engine.doctors,
-            "diagnostic_resources": self.engine.diagnostic_resources,
-            "icu_beds": self.engine.icu_beds,
-            "patients": self.engine.patients,
-        }
-        self.engine.coordinator.handle_patient_registration(p_dict, env)
-        if p_dict.get("requires_ambulance"):
-            self.engine.coordinator.request_ambulance_allocation(p_dict, env)
+        initial_event_count = len(self.engine.all_events)
+
+        # Schedule arrival at current simulation time
+        arrival_time = max(self.engine.current_time, p_dict.get("arrival_time", self.engine.current_time))
+        self.engine.schedule_event(
+            time=arrival_time,
+            event_type="PATIENT_ARRIVAL",
+            patient_id=p_dict["id"],
+        )
+
+        # Step simulation to dynamically orchestrate agents across all clinical milestones
+        max_steps = 40
+        steps = 0
+        while self.engine.event_queue and steps < max_steps:
+            event = self.engine.step()
+            steps += 1
+            curr_state = self.engine.patients[p_dict["id"]].get("workflow_state")
+            if curr_state in ("COMPLETED", "DISCHARGED") and not any(e.patient_id == p_dict["id"] for e in self.engine.event_queue):
+                break
 
         self.engine._sync_logs()
 
-        # Save to DB
+        # Collect events created during this patient's orchestration
+        patient_events = [
+            evt for evt in self.engine.all_events[initial_event_count:]
+            if evt.patient_id == p_dict["id"]
+        ]
+
+        updated_patient = copy.deepcopy(self.engine.patients[p_dict["id"]])
+        updated_patient["orchestration_events"] = patient_events
+
+        # Sync to database
         db = SessionLocal()
         try:
-            db.add(PatientModel(**p_dict))
-            db.commit()
+            self._sync_to_db(db)
         finally:
             db.close()
 
-        return p_dict
+        return updated_patient
+
+    def step_simulation(self) -> Dict[str, Any]:
+        """Advance simulation by a single discrete event and return event detail."""
+        if not self.engine.event_queue:
+            return {
+                "event": None,
+                "message": "Simulation event queue is empty. All emergency workflows completed.",
+                "is_completed": True,
+                "current_time": self.engine.current_time,
+            }
+
+        prev_count = len(self.engine.all_events)
+        event = self.engine.step()
+        new_events = self.engine.all_events[prev_count:]
+
+        db = SessionLocal()
+        try:
+            self._sync_to_db(db)
+        finally:
+            db.close()
+
+        return {
+            "event": {
+                "event_type": event.event_type,
+                "patient_id": event.patient_id,
+                "time": event.time,
+                "resource_id": event.resource_id,
+            } if event else None,
+            "new_events": [e.model_dump() for e in new_events],
+            "current_time": self.engine.current_time,
+            "is_completed": self.engine.is_completed,
+            "queue_remaining": len(self.engine.event_queue),
+        }
 
     def get_resources(self) -> Dict[str, Any]:
         """Return resources and live status counts."""

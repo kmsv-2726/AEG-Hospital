@@ -1,6 +1,7 @@
 """
 Pydantic schemas for data validation and API request/response serialization.
 """
+from __future__ import annotations
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from backend.app.models.enums import (
@@ -12,6 +13,20 @@ from backend.app.models.enums import (
     MessageType,
     AllocationStrategy,
 )
+
+
+class SimulationEventSchema(BaseModel):
+    id: Optional[int] = None
+    simulation_time: float
+    event_type: str
+    agent: str
+    patient_id: Optional[str] = None
+    resource_id: Optional[str] = None
+    description: str
+    outcome: str = "SUCCESS"
+    is_conflict: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PatientBase(BaseModel):
@@ -51,6 +66,7 @@ class PatientRead(PatientBase):
     treatment_start_time: Optional[float] = None
     completion_time: Optional[float] = None
     waiting_duration: float = 0.0
+    orchestration_events: Optional[List[SimulationEventSchema]] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -132,19 +148,6 @@ class AgentMessageSchema(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-
-class SimulationEventSchema(BaseModel):
-    id: Optional[int] = None
-    simulation_time: float
-    event_type: str
-    agent: str
-    patient_id: Optional[str] = None
-    resource_id: Optional[str] = None
-    description: str
-    outcome: str = "SUCCESS"
-    is_conflict: bool = False
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentStatusRead(BaseModel):

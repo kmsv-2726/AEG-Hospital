@@ -77,6 +77,12 @@ async def start_simulation(request: SimulationStartRequest = SimulationStartRequ
     return sim_service.start_simulation(strategy=request.strategy)
 
 
+@router.post("/simulation/step", tags=["Simulation"])
+async def step_simulation():
+    """Advance the simulation by a single discrete event and return agent activity."""
+    return sim_service.step_simulation()
+
+
 @router.post("/simulation/reset", tags=["Simulation"])
 async def reset_simulation(request: SimulationResetRequest = SimulationResetRequest()):
     """Reset simulation state and re-seed the standard demonstration emergency scenario."""
