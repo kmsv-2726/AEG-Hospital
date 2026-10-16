@@ -1,6 +1,6 @@
 """
 Simulation Service: Singleton state manager bridging the FastAPI API layer,
-the SQLite database, and the in-memory SimulationEngine.
+the SQLite database, the in-memory SimulationEngine, and OS Resource Management.
 """
 import json
 import os
@@ -8,7 +8,7 @@ import copy
 from typing import Dict, Any, List, Optional
 from backend.app.simulation.engine import SimulationEngine
 from backend.app.simulation.scenarios import DEMO_PATIENTS, DEMO_RESOURCES
-from backend.app.models.enums import AllocationStrategy, ResourceStatus
+from backend.app.models.enums import AllocationStrategy, ResourceStatus, WorkflowState
 from backend.app.schemas.hospital_schemas import (
     PatientCreate,
     PatientRead,
@@ -16,6 +16,9 @@ from backend.app.schemas.hospital_schemas import (
     AgentStatusRead,
     SimulationEventSchema,
     MetricsSummary,
+    OSManagerStatusRead,
+    PatientOrchestrationResponse,
+    OrchestrationStep,
 )
 from backend.app.database.init_db import init_db, reset_db
 from backend.app.database.session import SessionLocal
@@ -123,17 +126,15 @@ class SimulationService:
 
     def _sync_to_db(self, db):
         """Persist engine state back to database tables."""
-        # Update patients
         for p_data in self.engine.patients.values():
             db_p = db.query(PatientModel).filter(PatientModel.id == p_data["id"]).first()
+            filtered_p = {k: v for k, v in p_data.items() if hasattr(PatientModel, k) and k != "_sa_instance_state"}
             if db_p:
-                for k, v in p_data.items():
-                    if hasattr(db_p, k):
-                        setattr(db_p, k, v)
+                for k, v in filtered_p.items():
+                    setattr(db_p, k, v)
             else:
-                db.add(PatientModel(**p_data))
+                db.add(PatientModel(**filtered_p))
 
-        # Update ambulances
         for amb in self.engine.ambulances:
             db_amb = db.query(AmbulanceModel).filter(AmbulanceModel.id == amb["id"]).first()
             if db_amb:
@@ -141,7 +142,6 @@ class SimulationService:
                     if hasattr(db_amb, k):
                         setattr(db_amb, k, v)
 
-        # Update doctors
         for doc in self.engine.doctors:
             db_doc = db.query(DoctorModel).filter(DoctorModel.id == doc["id"]).first()
             if db_doc:
@@ -149,7 +149,6 @@ class SimulationService:
                     if hasattr(db_doc, k):
                         setattr(db_doc, k, v)
 
-        # Update diagnostic resources
         for diag in self.engine.diagnostic_resources:
             db_diag = db.query(DiagnosticResourceModel).filter(DiagnosticResourceModel.id == diag["id"]).first()
             if db_diag:
@@ -157,7 +156,6 @@ class SimulationService:
                     if hasattr(db_diag, k):
                         setattr(db_diag, k, v)
 
-        # Update ICU beds
         for bed in self.engine.icu_beds:
             db_bed = db.query(ICUBedModel).filter(ICUBedModel.id == bed["id"]).first()
             if db_bed:
@@ -165,7 +163,6 @@ class SimulationService:
                     if hasattr(db_bed, k):
                         setattr(db_bed, k, v)
 
-        # Save events
         for evt in self.engine.all_events:
             db_evt = SimulationEventModel(
                 simulation_time=evt.simulation_time,
@@ -186,29 +183,54 @@ class SimulationService:
         return list(self.engine.patients.values())
 
     def add_emergency_patient(self, patient_data: PatientCreate) -> Dict[str, Any]:
-        """Submit and process a new emergency patient through the complete multi-agent pipeline."""
+        """
+        Submit and process a new emergency patient through the autonomous multi-agent pipeline.
+        Engages specialized agents (Triage, Ambulance, Doctor, Diagnostic, ICU)
+        and leaves resources and agents actively occupied for live monitoring.
+        """
         p_dict = patient_data.model_dump()
+        pid = p_dict["id"]
         p_dict["workflow_state"] = "REGISTERED"
-        self.engine.patients[p_dict["id"]] = p_dict
+        self.engine.patients[pid] = p_dict
 
         initial_event_count = len(self.engine.all_events)
 
-        # Schedule arrival at current simulation time
+        # Register in OS Manager
         arrival_time = max(self.engine.current_time, p_dict.get("arrival_time", self.engine.current_time))
+        self.engine.coordinator.os_manager.register_patient_process(p_dict, arrival_time)
+
+        # Schedule arrival
         self.engine.schedule_event(
             time=arrival_time,
             event_type="PATIENT_ARRIVAL",
-            patient_id=p_dict["id"],
+            patient_id=pid,
         )
 
-        # Step simulation to dynamically orchestrate agents across all clinical milestones
-        max_steps = 40
+        # Step simulation to dynamically orchestrate agents across intake and admission milestones
+        # We process through arrival, triage, ambulance dispatch, and hospital admission/doctor assignment
+        max_steps = 15
         steps = 0
         while self.engine.event_queue and steps < max_steps:
-            event = self.engine.step()
+            # Check if next event belongs to this patient or related waiting queues
+            next_evt = self.engine.event_queue[0]
+            curr_state = self.engine.patients[pid].get("workflow_state", "")
+
+            # If patient is actively admitted and in clinical care, stop so agents stay visibly active!
+            if curr_state in (
+                WorkflowState.DOCTOR_ASSIGNED.value,
+                WorkflowState.DIAGNOSTICS_IN_PROGRESS.value,
+                WorkflowState.TREATMENT_SIMULATED.value,
+                WorkflowState.WAITING_FOR_DOCTOR.value,
+                WorkflowState.WAITING_FOR_AMBULANCE.value,
+                WorkflowState.WAITING_FOR_ICU.value,
+                WorkflowState.WAITING_FOR_DIAGNOSTIC.value,
+            ) and next_evt.event_type in ("DOCTOR_EXAM_COMPLETED", "TREATMENT_COMPLETED", "DIAGNOSTIC_COMPLETED"):
+                break
+
+            self.engine.step()
             steps += 1
-            curr_state = self.engine.patients[p_dict["id"]].get("workflow_state")
-            if curr_state in ("COMPLETED", "DISCHARGED") and not any(e.patient_id == p_dict["id"] for e in self.engine.event_queue):
+
+            if curr_state in ("COMPLETED", "DISCHARGED"):
                 break
 
         self.engine._sync_logs()
@@ -216,10 +238,10 @@ class SimulationService:
         # Collect events created during this patient's orchestration
         patient_events = [
             evt for evt in self.engine.all_events[initial_event_count:]
-            if evt.patient_id == p_dict["id"]
+            if evt.patient_id == pid
         ]
 
-        updated_patient = copy.deepcopy(self.engine.patients[p_dict["id"]])
+        updated_patient = copy.deepcopy(self.engine.patients[pid])
         updated_patient["orchestration_events"] = patient_events
 
         # Sync to database
@@ -290,11 +312,17 @@ class SimulationService:
         }
 
     def get_agents(self) -> List[AgentStatusRead]:
-        """Return monitor data for all agents."""
+        """Return monitor data for all agents including active patients, inbox, and recent messages."""
         agents = [self.engine.coordinator] + self.engine.coordinator.specialized_agents
         res_list = []
         for ag in agents:
             status_data = ag.get_status()
+            # Fetch recent messages involving this agent
+            recent_msgs = [
+                m for m in self.engine.coordinator.message_bus.message_history
+                if m.sender == ag.name or m.receiver == ag.name
+            ][-5:]
+
             res_list.append(
                 AgentStatusRead(
                     name=status_data["name"],
@@ -303,9 +331,111 @@ class SimulationService:
                     last_action=status_data["last_action"],
                     last_message=status_data["last_message"],
                     pending_count=status_data["pending_count"],
+                    active_patients=status_data.get("active_patients", []),
+                    current_process_id=status_data.get("current_process_id"),
+                    inbox_count=status_data.get("inbox_count", 0),
+                    recent_messages=recent_msgs,
                 )
             )
         return res_list
+
+    def get_os_status(self) -> Dict[str, Any]:
+        """Return OS Resource Manager state: semaphores, mutexes, ready queue, and PCBs."""
+        return self.engine.coordinator.os_manager.get_os_metrics(self.engine.current_time)
+
+    def get_patient_orchestration(self, patient_id: str) -> Dict[str, Any]:
+        """Return complete multi-agent orchestration transcript, PCB, and message feed for a patient."""
+        patient = self.engine.patients.get(patient_id)
+        if not patient:
+            return {}
+
+        pcb = self.engine.coordinator.os_manager.pcbs.get(patient_id)
+        messages = self.engine.coordinator.message_bus.get_messages_for_patient(patient_id)
+        events = [e for e in self.engine.all_events if e.patient_id == patient_id]
+
+        # Formulate structured chronological steps
+        steps = [
+            OrchestrationStep(
+                agent="HospitalCoordinator",
+                action="PATIENT_REGISTERED",
+                timestamp=patient.get("arrival_time", 0.0),
+                description=f"Registered {patient.get('name')} ({patient_id}). Initialized Process Control Block (PCB).",
+                status="COMPLETED",
+                details={"priority": patient.get("priority")},
+            ),
+            OrchestrationStep(
+                agent="TriageAgent",
+                action="TRIAGE_COMPLETED",
+                timestamp=patient.get("arrival_time", 0.0),
+                description=f"Rule-based urgency evaluation matched '{patient.get('severity_category')}'. Assigned {patient.get('priority')}.",
+                status="COMPLETED",
+                details={"priority": patient.get("priority")},
+            ),
+            OrchestrationStep(
+                agent="AmbulanceAgent",
+                action="AMBULANCE_DISPATCH",
+                timestamp=patient.get("ambulance_dispatch_time") or patient.get("arrival_time", 0.0),
+                description=(
+                    f"Dispatched unit {patient.get('assigned_ambulance_id')} with ETA."
+                    if patient.get("assigned_ambulance_id")
+                    else "Walk-in emergency or fleet busy (queued)."
+                ),
+                status="COMPLETED" if patient.get("assigned_ambulance_id") or not patient.get("requires_ambulance") else "WAITING",
+                details={"ambulance_id": patient.get("assigned_ambulance_id")},
+            ),
+            OrchestrationStep(
+                agent="DoctorAgent",
+                action="DOCTOR_ASSIGNMENT",
+                timestamp=patient.get("doctor_assignment_time") or 0.0,
+                description=(
+                    f"Assigned specialist {patient.get('assigned_doctor_id')} matching '{patient.get('required_specialty')}'."
+                    if patient.get("assigned_doctor_id")
+                    else f"Specialty '{patient.get('required_specialty')}' busy. Entered Doctor Ready Queue."
+                ),
+                status="COMPLETED" if patient.get("assigned_doctor_id") else "WAITING",
+                details={"doctor_id": patient.get("assigned_doctor_id")},
+            ),
+        ]
+
+        if patient.get("required_diagnostic"):
+            steps.append(
+                OrchestrationStep(
+                    agent="DiagnosticAgent",
+                    action="DIAGNOSTIC_SCHEDULED",
+                    timestamp=patient.get("diagnostic_start_time") or 0.0,
+                    description=(
+                        f"Acquired scanner mutex for {patient.get('required_diagnostic')} ({patient.get('assigned_diagnostic_id')})."
+                        if patient.get("assigned_diagnostic_id")
+                        else f"Scanner {patient.get('required_diagnostic')} busy. Queued."
+                    ),
+                    status="COMPLETED" if patient.get("assigned_diagnostic_id") else "WAITING",
+                    details={"diagnostic_id": patient.get("assigned_diagnostic_id")},
+                )
+            )
+
+        if patient.get("requires_icu"):
+            steps.append(
+                OrchestrationStep(
+                    agent="ICUAgent",
+                    action="ICU_BED_RESERVATION",
+                    timestamp=patient.get("icu_reservation_time") or 0.0,
+                    description=(
+                        f"Acquired ICU Counting Semaphore permit. Reserved bed {patient.get('assigned_icu_bed_id')}."
+                        if patient.get("assigned_icu_bed_id")
+                        else "All ICU beds occupied. Blocked on semaphore."
+                    ),
+                    status="COMPLETED" if patient.get("assigned_icu_bed_id") else "WAITING",
+                    details={"icu_bed_id": patient.get("assigned_icu_bed_id")},
+                )
+            )
+
+        return {
+            "patient": patient,
+            "pcb": pcb.model_dump() if pcb else None,
+            "orchestration_steps": [s.model_dump() for s in steps],
+            "agent_messages": [m.model_dump() for m in messages],
+            "events": [e.model_dump() for e in events],
+        }
 
     def get_events(self) -> List[SimulationEventSchema]:
         """Return full event log."""

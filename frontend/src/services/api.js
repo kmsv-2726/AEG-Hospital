@@ -31,6 +31,21 @@ export const api = {
     return res.data;
   },
 
+  getPatientOrchestration: async (patientId) => {
+    const res = await apiClient.get(`/patients/${patientId}/orchestration`);
+    return res.data;
+  },
+
+  getOsStatus: async () => {
+    const res = await apiClient.get('/os/status');
+    return res.data;
+  },
+
+  getMessages: async () => {
+    const res = await apiClient.get('/messages');
+    return res.data;
+  },
+
   getResources: async () => {
     const res = await apiClient.get('/resources');
     return res.data;

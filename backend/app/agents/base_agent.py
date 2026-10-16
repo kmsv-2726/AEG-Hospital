@@ -1,8 +1,10 @@
 """
 Base Agent class defining the standardized intelligent agent lifecycle and communication interface.
+Enhanced with autonomous message processing, inboxes, and process tracking.
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
+import uuid
 from backend.app.schemas.hospital_schemas import AgentMessageSchema, SimulationEventSchema
 from backend.app.models.enums import MessageType
 
@@ -11,18 +13,35 @@ class BaseAgent(ABC):
     """
     Abstract Base Class for all specialized agents in the Smart Hospital MAS.
     Implements PEAS foundation: Percepts, Actions, Goals, Environment interactions.
+    Now equipped with an autonomous message queue and process tracking.
     """
 
     def __init__(self, agent_id: str, name: str, role: str):
         self.agent_id = agent_id
         self.name = name
         self.role = role
-        self.status: str = "IDLE"  # IDLE, ACTIVE, BUSY, WAITING
+        self.status: str = "IDLE"  # IDLE, ACTIVE, BUSY, WAITING, EXAMINING, etc.
         self.last_action: Optional[str] = None
         self.last_message: Optional[str] = None
+        self.current_process_id: Optional[str] = None
+        self.active_patients: List[str] = []
         self.pending_requests: List[Dict[str, Any]] = []
         self.event_log: List[SimulationEventSchema] = []
+        self.inbox: List[AgentMessageSchema] = []
         self.outbox: List[AgentMessageSchema] = []
+        self.message_bus: Optional[Any] = None
+
+    def set_message_bus(self, message_bus: Any):
+        """Attach message bus and register reactive listener."""
+        self.message_bus = message_bus
+        if message_bus:
+            message_bus.register_agent(self.name, self.handle_message_wrapper)
+
+    def handle_message_wrapper(self, message: AgentMessageSchema) -> Optional[AgentMessageSchema]:
+        """Entry wrapper for incoming messages from the message bus."""
+        self.inbox.append(message)
+        self.last_message = f"Received {message.message_type.value} from {message.sender}"
+        return self.handle_message(message, {})
 
     def get_status(self) -> Dict[str, Any]:
         """Return agent status dictionary for monitoring."""
@@ -34,6 +53,9 @@ class BaseAgent(ABC):
             "last_action": self.last_action,
             "last_message": self.last_message,
             "pending_count": len(self.pending_requests),
+            "inbox_count": len(self.inbox),
+            "active_patients": list(self.active_patients),
+            "current_process_id": self.current_process_id,
         }
 
     def emit_event(
@@ -71,9 +93,7 @@ class BaseAgent(ABC):
         correlation_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
     ) -> AgentMessageSchema:
-        """Construct a structured message and enqueue it to the outbox."""
-        import uuid
-
+        """Construct a structured message, send to message bus if attached, and enqueue in outbox."""
         msg_id = f"MSG-{uuid.uuid4().hex[:8].upper()}"
         msg = AgentMessageSchema(
             message_id=msg_id,
@@ -83,12 +103,25 @@ class BaseAgent(ABC):
             patient_id=patient_id,
             resource_id=resource_id,
             simulation_time=simulation_time,
-            correlation_id=correlation_id,
+            correlation_id=correlation_id or msg_id,
             payload=payload or {},
             status="PENDING",
         )
         self.outbox.append(msg)
         self.last_message = f"Sent {message_type.value} to {receiver} for {patient_id or 'N/A'}"
+        
+        if self.message_bus:
+            self.message_bus.send_message(
+                sender=self.name,
+                receiver=receiver,
+                message_type=message_type,
+                patient_id=patient_id,
+                resource_id=resource_id,
+                simulation_time=simulation_time,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+
         return msg
 
     @abstractmethod

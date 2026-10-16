@@ -1,9 +1,11 @@
 """
 Triage Agent: Evaluates patient condition and assigns synthetic priority.
+Enhanced with autonomous message handling and status progression.
 """
 from typing import Dict, Any, Optional
 from backend.app.agents.base_agent import BaseAgent
 from backend.app.models.enums import PriorityLevel, MessageType
+from backend.app.schemas.hospital_schemas import AgentMessageSchema
 
 
 class TriageAgent(BaseAgent):
@@ -15,11 +17,30 @@ class TriageAgent(BaseAgent):
     def __init__(self, agent_id: str = "AGENT-TRIAGE", name: str = "TriageAgent"):
         super().__init__(agent_id=agent_id, name=name, role="Triage Coordinator")
 
+    def handle_message(self, message: AgentMessageSchema, environment_state: Dict[str, Any]) -> Optional[AgentMessageSchema]:
+        """Autonomously react to incoming triage requests."""
+        if message.message_type in (MessageType.TRIAGE_REQUEST, MessageType.PATIENT_REGISTERED):
+            patient_data = message.payload.get("patient", {})
+            if not patient_data and message.patient_id:
+                patient_data = {"id": message.patient_id, "severity_category": message.payload.get("severity_category", "")}
+            env = {"patient": patient_data, "simulation_time": message.simulation_time}
+            percepts = self.perceive(env)
+            decision = self.decide(percepts)
+            res = self.act(decision, env)
+            return res.get("message")
+        return None
+
     def perceive(self, environment_state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract patient severity and symptoms from environment state."""
         patient_data = environment_state.get("patient", {})
+        pid = patient_data.get("id")
+        self.current_process_id = pid
+        self.status = "TRIAGING"
+        if pid and pid not in self.active_patients:
+            self.active_patients.append(pid)
+
         return {
-            "patient_id": patient_data.get("id"),
+            "patient_id": pid,
             "severity_category": patient_data.get("severity_category", ""),
             "condition_description": patient_data.get("condition_description", ""),
             "arrival_time": patient_data.get("arrival_time", 0.0),
@@ -38,16 +59,16 @@ class TriageAgent(BaseAgent):
 
         if any(term in severity or term in description for term in ["critical", "cardiac", "arrest", "bleeding", "shock"]):
             priority = PriorityLevel.P1
-            reason = "Simulation rule matched critical emergency indicators (P1)."
+            reason = "Deterministic clinical rule matched critical emergency indicators (P1)."
         elif any(term in severity or term in description for term in ["high", "severe", "compound", "fracture with compromise"]):
             priority = PriorityLevel.P2
-            reason = "Simulation rule matched high-priority urgent trauma indicators (P2)."
+            reason = "Deterministic clinical rule matched high-priority urgent trauma indicators (P2)."
         elif any(term in severity or term in description for term in ["moderate", "injury", "wrist", "laceration"]):
             priority = PriorityLevel.P3
-            reason = "Simulation rule matched moderate non-life-threatening category (P3)."
+            reason = "Deterministic clinical rule matched moderate non-life-threatening category (P3)."
         else:
             priority = PriorityLevel.P4
-            reason = "Simulation rule assigned low-severity ambulatory priority (P4)."
+            reason = "Deterministic clinical rule assigned low-severity ambulatory priority (P4)."
 
         return {
             "patient_id": percepts.get("patient_id"),
@@ -56,7 +77,7 @@ class TriageAgent(BaseAgent):
         }
 
     def act(self, decision: Dict[str, Any], environment_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Record triage event and send message to HospitalCoordinator."""
+        """Record triage event and send message to HospitalCoordinator and downstream agents."""
         sim_time = environment_state.get("simulation_time", 0.0)
         patient_id = decision["patient_id"]
         priority = decision["priority"]
@@ -70,6 +91,7 @@ class TriageAgent(BaseAgent):
             outcome="SUCCESS",
         )
 
+        # Autonomous structured notification to coordinator
         msg = self.send_message(
             receiver="HospitalCoordinator",
             message_type=MessageType.TRIAGE_COMPLETED,
@@ -77,6 +99,10 @@ class TriageAgent(BaseAgent):
             simulation_time=sim_time,
             payload={"priority": priority.value, "reason": reason},
         )
+
+        self.status = "IDLE"
+        if patient_id in self.active_patients:
+            self.active_patients.remove(patient_id)
 
         return {
             "status": "TRIAGE_COMPLETED",

@@ -158,6 +158,10 @@ class AgentStatusRead(BaseModel):
     last_message: Optional[str] = None
     pending_count: int = 0
     assigned_resources: List[str] = Field(default_factory=list)
+    active_patients: List[str] = Field(default_factory=list)
+    current_process_id: Optional[str] = None
+    inbox_count: int = 0
+    recent_messages: List[AgentMessageSchema] = Field(default_factory=list)
 
 
 class SimulationStartRequest(BaseModel):
@@ -187,3 +191,37 @@ class MetricsSummary(BaseModel):
     strategy: str = "PRIORITY_AWARE"
     simulation_duration: float = 0.0
     detailed_observations: Dict[str, Any] = Field(default_factory=dict)
+
+
+class OSManagerStatusRead(BaseModel):
+    process_counts: Dict[str, int]
+    total_processes: int
+    ready_queue_length: int
+    ready_queue_pids: List[str]
+    average_turnaround_time: float
+    average_waiting_time: float
+    doctor_cpu_utilization_pct: float
+    diagnostic_io_utilization_pct: float
+    icu_semaphore: Dict[str, Any]
+    ambulance_semaphore: Dict[str, Any]
+    doctor_mutexes: List[Dict[str, Any]]
+    diagnostic_mutexes: List[Dict[str, Any]]
+    pcbs: List[Dict[str, Any]]
+
+
+class OrchestrationStep(BaseModel):
+    agent: str
+    action: str
+    timestamp: float
+    description: str
+    status: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PatientOrchestrationResponse(BaseModel):
+    patient: PatientRead
+    pcb: Optional[Dict[str, Any]] = None
+    orchestration_steps: List[OrchestrationStep] = Field(default_factory=list)
+    agent_messages: List[AgentMessageSchema] = Field(default_factory=list)
+    events: List[SimulationEventSchema] = Field(default_factory=list)
+

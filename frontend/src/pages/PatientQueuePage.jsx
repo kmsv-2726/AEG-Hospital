@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Users, Search, Filter, Clock, Ambulance, Stethoscope, Activity, Bed, PlusCircle } from 'lucide-react';
+import { Users, Search, Filter, Clock, Ambulance, Stethoscope, Activity, Bed, PlusCircle, Sparkles } from 'lucide-react';
 
-export default function PatientQueuePage({ patients = [], onOpenEmergencyModal }) {
+export default function PatientQueuePage({ patients = [], onOpenEmergencyModal, onViewOrchestration }) {
   const [filterPriority, setFilterPriority] = useState('ALL');
   const [filterWaiting, setFilterWaiting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -98,7 +98,7 @@ export default function PatientQueuePage({ patients = [], onOpenEmergencyModal }
               border: filterWaiting ? '1px solid var(--amber-warning)' : '1px solid var(--border-subtle)',
               background: filterWaiting ? 'rgba(245, 158, 11, 0.2)' : 'rgba(0,0,0,0.25)',
               color: filterWaiting ? '#fbbf24' : 'var(--text-muted)',
-              fontSize: '0.75rem',
+              fontSize: '0.8rem',
               fontWeight: 600,
               cursor: 'pointer',
               display: 'flex',
@@ -106,11 +106,11 @@ export default function PatientQueuePage({ patients = [], onOpenEmergencyModal }
               gap: '6px'
             }}
           >
-            <Clock size={13} />
+            <Clock size={14} />
             <span>Waiting Only</span>
           </button>
 
-          {/* Intake button */}
+          {/* New Emergency Button */}
           <button
             className="btn btn-primary"
             onClick={onOpenEmergencyModal}
@@ -136,12 +136,13 @@ export default function PatientQueuePage({ patients = [], onOpenEmergencyModal }
               <th style={{ padding: '12px 14px' }}>DIAGNOSTICS</th>
               <th style={{ padding: '12px 14px' }}>ICU BED</th>
               <th style={{ padding: '12px 14px' }}>ARRIVAL</th>
+              <th style={{ padding: '12px 14px' }}>ORCHESTRATION</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-dim)' }}>
+                <td colSpan={10} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-dim)' }}>
                   No patients match the selected filter criteria.
                 </td>
               </tr>
@@ -236,6 +237,27 @@ export default function PatientQueuePage({ patients = [], onOpenEmergencyModal }
                     </td>
                     <td style={{ padding: '14px', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                       {p.arrival_time}m
+                    </td>
+                    <td style={{ padding: '14px' }}>
+                      <button
+                        onClick={() => onViewOrchestration && onViewOrchestration(p)}
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(99, 102, 241, 0.2))',
+                          border: '1px solid rgba(6, 182, 212, 0.4)',
+                          borderRadius: '8px',
+                          padding: '5px 10px',
+                          color: '#38bdf8',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px'
+                        }}
+                      >
+                        <Sparkles size={13} />
+                        <span>Inspect</span>
+                      </button>
                     </td>
                   </tr>
                 );

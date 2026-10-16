@@ -1,5 +1,6 @@
 """
 FastAPI REST API routes for Smart Hospital Multi-Agent Emergency Response System.
+Enhanced with OS Resource Management and Patient Orchestration Transcript endpoints.
 """
 from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException, status
@@ -12,6 +13,9 @@ from backend.app.schemas.hospital_schemas import (
     MetricsSummary,
     SimulationStartRequest,
     SimulationResetRequest,
+    OSManagerStatusRead,
+    PatientOrchestrationResponse,
+    AgentMessageSchema,
 )
 from backend.app.services.simulation_service import sim_service
 from backend.app.models.enums import AllocationStrategy
@@ -28,6 +32,7 @@ async def health_check():
         "version": "1.0.0",
         "simulation_mode": "local_rule_based",
         "external_api_keys_required": False,
+        "os_resource_manager": "active",
     }
 
 
@@ -49,8 +54,17 @@ async def register_patient(patient: PatientCreate):
 
 @router.post("/emergency", response_model=PatientRead, status_code=status.HTTP_201_CREATED, tags=["Emergency"])
 async def submit_emergency(patient: PatientCreate):
-    """Submit a high-priority synthetic emergency incident triggering immediate agent dispatch."""
+    """Submit a high-priority synthetic emergency incident triggering autonomous multi-agent dispatch."""
     return sim_service.add_emergency_patient(patient)
+
+
+@router.get("/patients/{patient_id}/orchestration", response_model=PatientOrchestrationResponse, tags=["Orchestration"])
+async def get_patient_orchestration(patient_id: str):
+    """Retrieve full autonomous multi-agent orchestration steps, messages, and PCB for a patient."""
+    orchestration = sim_service.get_patient_orchestration(patient_id)
+    if not orchestration:
+        raise HTTPException(status_code=404, detail=f"Patient {patient_id} not found.")
+    return orchestration
 
 
 @router.get("/resources", response_model=ResourceSummary, tags=["Resources"])
@@ -61,8 +75,20 @@ async def get_resources():
 
 @router.get("/agents", response_model=List[AgentStatusRead], tags=["Agents"])
 async def get_agents():
-    """Retrieve active status, last actions, and messages for all specialized agents and Coordinator."""
+    """Retrieve active status, active patients, inboxes, and recent messages for all agents."""
     return sim_service.get_agents()
+
+
+@router.get("/messages", response_model=List[AgentMessageSchema], tags=["Agents"])
+async def get_all_messages():
+    """Retrieve complete chronological log of all inter-agent messages dispatched across the message bus."""
+    return sim_service.engine.coordinator.message_bus.message_history
+
+
+@router.get("/os/status", response_model=OSManagerStatusRead, tags=["OS Resource Management"])
+async def get_os_status():
+    """Retrieve Operating System concepts metrics: Semaphores, Mutexes, Ready Queue, Blocked Queue, PCBs."""
+    return sim_service.get_os_status()
 
 
 @router.get("/events", response_model=List[SimulationEventSchema], tags=["Events"])

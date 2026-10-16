@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Navbar from './components/Navbar';
 import EmergencyModal from './components/EmergencyModal';
+import OrchestrationModal from './components/OrchestrationModal';
 import OverviewPage from './pages/OverviewPage';
 import PatientQueuePage from './pages/PatientQueuePage';
 import AgentMonitorPage from './pages/AgentMonitorPage';
@@ -14,6 +15,10 @@ export default function App() {
   const [strategy, setStrategy] = useState('PRIORITY_AWARE');
   const [isRunning, setIsRunning] = useState(false);
   const [isEmergencyModalOpen, setIsEmergencyModalOpen] = useState(false);
+  
+  // Orchestration Inspection State
+  const [selectedPatientForOrchestration, setSelectedPatientForOrchestration] = useState(null);
+  const [isOrchestrationModalOpen, setIsOrchestrationModalOpen] = useState(false);
 
   const [patients, setPatients] = useState([]);
   const [resources, setResources] = useState(null);
@@ -21,18 +26,22 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [baselineData, setBaselineData] = useState(null);
+  const [osStatus, setOsStatus] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [errorMsg, setErrorMsg] = useState(null);
 
   // Load all system state from API
   const refreshData = useCallback(async () => {
     try {
-      const [pts, rsc, ags, evts, met, base] = await Promise.allSettled([
+      const [pts, rsc, ags, evts, met, base, os, msgs] = await Promise.allSettled([
         api.getPatients(),
         api.getResources(),
         api.getAgents(),
         api.getEvents(),
         api.getMetrics(),
         api.getBaselineComparison(),
+        api.getOsStatus(),
+        api.getMessages(),
       ]);
 
       if (pts.status === 'fulfilled') setPatients(pts.value);
@@ -41,6 +50,8 @@ export default function App() {
       if (evts.status === 'fulfilled') setEvents(evts.value);
       if (met.status === 'fulfilled') setMetrics(met.value);
       if (base.status === 'fulfilled') setBaselineData(base.value);
+      if (os.status === 'fulfilled') setOsStatus(os.value);
+      if (msgs.status === 'fulfilled') setMessages(msgs.value);
       setErrorMsg(null);
     } catch (err) {
       console.error('Failed to sync simulation state:', err);
@@ -79,12 +90,24 @@ export default function App() {
 
   const handleSubmitEmergency = async (patientData) => {
     try {
-      await api.submitEmergency(patientData);
+      setIsRunning(true);
+      const createdPatient = await api.submitEmergency(patientData);
       await refreshData();
+      
+      // Immediately open the live AI orchestration modal for the user
+      setSelectedPatientForOrchestration(createdPatient);
+      setIsOrchestrationModalOpen(true);
     } catch (err) {
       console.error('Emergency submission error:', err);
       alert('Failed to register emergency: ' + err.message);
+    } finally {
+      setIsRunning(false);
     }
+  };
+
+  const handleOpenOrchestration = (patient) => {
+    setSelectedPatientForOrchestration(patient);
+    setIsOrchestrationModalOpen(true);
   };
 
   return (
@@ -121,6 +144,7 @@ export default function App() {
             metrics={metrics}
             strategy={strategy}
             setActiveTab={setActiveTab}
+            onViewOrchestration={handleOpenOrchestration}
           />
         )}
 
@@ -128,6 +152,7 @@ export default function App() {
           <PatientQueuePage
             patients={patients}
             onOpenEmergencyModal={() => setIsEmergencyModalOpen(true)}
+            onViewOrchestration={handleOpenOrchestration}
           />
         )}
 
@@ -135,6 +160,10 @@ export default function App() {
           <AgentMonitorPage
             agents={agents}
             resources={resources}
+            osStatus={osStatus}
+            messages={messages}
+            onViewOrchestration={handleOpenOrchestration}
+            patients={patients}
           />
         )}
 
@@ -152,10 +181,19 @@ export default function App() {
         )}
       </main>
 
+      {/* Synthetic Emergency Registration Dialog */}
       <EmergencyModal
         isOpen={isEmergencyModalOpen}
         onClose={() => setIsEmergencyModalOpen(false)}
         onSubmit={handleSubmitEmergency}
+      />
+
+      {/* Autonomous Multi-Agent Orchestration & OS Inspector Dialog */}
+      <OrchestrationModal
+        isOpen={isOrchestrationModalOpen}
+        onClose={() => setIsOrchestrationModalOpen(false)}
+        patient={selectedPatientForOrchestration}
+        events={events}
       />
     </div>
   );

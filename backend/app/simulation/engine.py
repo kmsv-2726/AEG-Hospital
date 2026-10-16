@@ -1,5 +1,6 @@
 """
 Discrete-Event Simulation (DES) Engine for Multi-Agent Hospital Emergency Operations.
+Enhanced with OS Resource Management (PCBs, Semaphores, Mutexes, and Dynamic Aging).
 """
 import heapq
 import copy
@@ -14,7 +15,7 @@ from backend.app.schemas.hospital_schemas import MetricsSummary, SimulationEvent
 class SimulationEngine:
     """
     Priority-queue event scheduler managing the execution of simulated hospital time,
-    agent communications, conflict resolution, and deterministic reproducibility.
+    agent communications, conflict resolution, OS scheduling, and deterministic reproducibility.
     """
 
     def __init__(
@@ -65,15 +66,25 @@ class SimulationEngine:
         patients_data: List[Dict[str, Any]],
         resources_data: Dict[str, List[Dict[str, Any]]],
     ):
-        """Initialize engine state with deep-copied scenario data."""
+        """Initialize engine state with deep-copied scenario data and register OS primitives."""
         self.patients = {p["id"]: copy.deepcopy(p) for p in patients_data}
         self.ambulances = copy.deepcopy(resources_data.get("ambulances", []))
         self.doctors = copy.deepcopy(resources_data.get("doctors", []))
         self.diagnostic_resources = copy.deepcopy(resources_data.get("diagnostic_resources", []))
         self.icu_beds = copy.deepcopy(resources_data.get("icu_beds", []))
 
-        # Schedule initial arrival events
+        # Synchronize OS manager resources
+        env = {
+            "doctors": self.doctors,
+            "diagnostic_resources": self.diagnostic_resources,
+            "icu_beds": self.icu_beds,
+            "ambulances": self.ambulances,
+        }
+        self.coordinator.sync_os_resources(env)
+
+        # Register PCBs for patients
         for p in self.patients.values():
+            self.coordinator.os_manager.register_patient_process(p, p.get("arrival_time", 0.0))
             self.schedule_event(
                 time=p.get("arrival_time", 0.0),
                 event_type="PATIENT_ARRIVAL",
@@ -183,6 +194,7 @@ class SimulationEngine:
             self.coordinator.ambulance_agent.release_ambulance(
                 event.resource_id, self.ambulances, self.current_time
             )
+            self.coordinator.os_manager.ambulance_semaphore.release(patient["id"])
             # Retry any waiting ambulances
             self._retry_waiting_ambulances(env)
 
@@ -239,6 +251,7 @@ class SimulationEngine:
             self.coordinator.diagnostic_agent.release_diagnostic(
                 event.resource_id, self.diagnostic_resources, self.current_time
             )
+            self.coordinator.release_diagnostic_mutex(event.resource_id, patient["id"], self.current_time)
             self._retry_waiting_diagnostics(env)
 
         self._route_after_exam_or_diagnostics(patient, env)
@@ -282,12 +295,14 @@ class SimulationEngine:
         doc_id = patient.get("assigned_doctor_id")
         if doc_id:
             self.coordinator.doctor_agent.release_doctor(doc_id, self.doctors, self.current_time)
+            self.coordinator.release_doctor_mutex(doc_id, patient["id"], self.current_time)
             self._retry_waiting_doctors(env)
 
         # Release ICU bed if occupied
         bed_id = patient.get("assigned_icu_bed_id")
         if bed_id:
             self.coordinator.icu_agent.release_bed(bed_id, self.icu_beds, self.current_time)
+            self.coordinator.release_icu_semaphore(patient["id"])
             self._retry_waiting_icu(env)
 
         self.schedule_event(
@@ -300,6 +315,7 @@ class SimulationEngine:
         patient = self.patients.get(event.patient_id)
         if patient:
             patient["workflow_state"] = WorkflowState.DISCHARGED.value
+            self.coordinator.complete_patient_process(patient["id"], self.current_time)
             self.coordinator.emit_event(
                 simulation_time=self.current_time,
                 event_type="PATIENT_DISCHARGED",
@@ -312,7 +328,7 @@ class SimulationEngine:
     # -------------------------------------------------------------
 
     def _retry_waiting_ambulances(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_ambulances, self.patients)
+        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_ambulances, self.patients, self.current_time)
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_ambulance_allocation(p, env)
@@ -330,7 +346,7 @@ class SimulationEngine:
                 break
 
     def _retry_waiting_doctors(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_doctors, self.patients)
+        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_doctors, self.patients, self.current_time)
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_doctor_allocation(p, env)
@@ -348,7 +364,7 @@ class SimulationEngine:
                 break
 
     def _retry_waiting_diagnostics(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_diagnostics, self.patients)
+        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_diagnostics, self.patients, self.current_time)
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_diagnostic_allocation(p, env)
@@ -366,7 +382,7 @@ class SimulationEngine:
                 break
 
     def _retry_waiting_icu(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_icu, self.patients)
+        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_icu, self.patients, self.current_time)
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_icu_allocation(p, env)
@@ -386,7 +402,7 @@ class SimulationEngine:
 
     def get_metrics(self) -> MetricsSummary:
         """Compute simulation metrics over current state."""
-        return calculate_simulation_metrics(
+        metrics = calculate_simulation_metrics(
             patients=list(self.patients.values()),
             ambulances=self.ambulances,
             doctors=self.doctors,
@@ -396,3 +412,4 @@ class SimulationEngine:
             simulation_duration=self.current_time,
             strategy=self.strategy.value,
         )
+        return metrics
