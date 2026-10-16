@@ -1,0 +1,114 @@
+"""
+Base Agent class defining the standardized intelligent agent lifecycle and communication interface.
+"""
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, List
+from backend.app.schemas.hospital_schemas import AgentMessageSchema, SimulationEventSchema
+from backend.app.models.enums import MessageType
+
+
+class BaseAgent(ABC):
+    """
+    Abstract Base Class for all specialized agents in the Smart Hospital MAS.
+    Implements PEAS foundation: Percepts, Actions, Goals, Environment interactions.
+    """
+
+    def __init__(self, agent_id: str, name: str, role: str):
+        self.agent_id = agent_id
+        self.name = name
+        self.role = role
+        self.status: str = "IDLE"  # IDLE, ACTIVE, BUSY, WAITING
+        self.last_action: Optional[str] = None
+        self.last_message: Optional[str] = None
+        self.pending_requests: List[Dict[str, Any]] = []
+        self.event_log: List[SimulationEventSchema] = []
+        self.outbox: List[AgentMessageSchema] = []
+
+    def get_status(self) -> Dict[str, Any]:
+        """Return agent status dictionary for monitoring."""
+        return {
+            "agent_id": self.agent_id,
+            "name": self.name,
+            "role": self.role,
+            "status": self.status,
+            "last_action": self.last_action,
+            "last_message": self.last_message,
+            "pending_count": len(self.pending_requests),
+        }
+
+    def emit_event(
+        self,
+        simulation_time: float,
+        event_type: str,
+        description: str,
+        patient_id: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        outcome: str = "SUCCESS",
+        is_conflict: bool = False,
+    ) -> SimulationEventSchema:
+        """Create and record an explainable simulation event."""
+        event = SimulationEventSchema(
+            simulation_time=simulation_time,
+            event_type=event_type,
+            agent=self.name,
+            patient_id=patient_id,
+            resource_id=resource_id,
+            description=description,
+            outcome=outcome,
+            is_conflict=is_conflict,
+        )
+        self.event_log.append(event)
+        self.last_action = f"{event_type}: {description}"
+        return event
+
+    def send_message(
+        self,
+        receiver: str,
+        message_type: MessageType,
+        patient_id: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        simulation_time: float = 0.0,
+        correlation_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> AgentMessageSchema:
+        """Construct a structured message and enqueue it to the outbox."""
+        import uuid
+
+        msg_id = f"MSG-{uuid.uuid4().hex[:8].upper()}"
+        msg = AgentMessageSchema(
+            message_id=msg_id,
+            sender=self.name,
+            receiver=receiver,
+            message_type=message_type,
+            patient_id=patient_id,
+            resource_id=resource_id,
+            simulation_time=simulation_time,
+            correlation_id=correlation_id,
+            payload=payload or {},
+            status="PENDING",
+        )
+        self.outbox.append(msg)
+        self.last_message = f"Sent {message_type.value} to {receiver} for {patient_id or 'N/A'}"
+        return msg
+
+    @abstractmethod
+    def perceive(self, environment_state: Dict[str, Any]) -> Dict[str, Any]:
+        """Inspect environmental state and extract relevant percepts."""
+        pass
+
+    @abstractmethod
+    def decide(self, percepts: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute deterministic rule-based or utility-ranked decision logic."""
+        pass
+
+    @abstractmethod
+    def act(self, decision: Dict[str, Any], environment_state: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform the decided action on the shared environment."""
+        pass
+
+    def handle_message(
+        self, message: AgentMessageSchema, environment_state: Dict[str, Any]
+    ) -> Optional[AgentMessageSchema]:
+        """Receive an incoming structured message and route to internal handling logic."""
+        self.last_message = f"Received {message.message_type.value} from {message.sender}"
+        return None

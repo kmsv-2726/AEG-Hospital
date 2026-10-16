@@ -1,0 +1,81 @@
+"""
+Domain Enums for Smart Hospital Multi-Agent Emergency Response System.
+"""
+from enum import Enum
+
+
+class PriorityLevel(str, Enum):
+    P1 = "P1"  # Critical (e.g. cardiac arrest, massive trauma)
+    P2 = "P2"  # High (e.g. severe asthma, fracture with compromise)
+    P3 = "P3"  # Moderate (e.g. moderate injury, stable abdominal pain)
+    P4 = "P4"  # Low (e.g. minor cuts, mild fever)
+
+
+class WorkflowState(str, Enum):
+    REGISTERED = "REGISTERED"
+    TRIAGED = "TRIAGED"
+    WAITING_FOR_AMBULANCE = "WAITING_FOR_AMBULANCE"
+    AMBULANCE_ASSIGNED = "AMBULANCE_ASSIGNED"
+    IN_TRANSIT = "IN_TRANSIT"
+    ARRIVED = "ARRIVED"
+    ADMITTED = "ADMITTED"
+    WAITING_FOR_DOCTOR = "WAITING_FOR_DOCTOR"
+    DOCTOR_ASSIGNED = "DOCTOR_ASSIGNED"
+    WAITING_FOR_DIAGNOSTIC = "WAITING_FOR_DIAGNOSTIC"
+    DIAGNOSTICS_IN_PROGRESS = "DIAGNOSTICS_IN_PROGRESS"
+    DIAGNOSTICS_COMPLETED = "DIAGNOSTICS_COMPLETED"
+    WAITING_FOR_ICU = "WAITING_FOR_ICU"
+    ICU_ALLOCATED = "ICU_ALLOCATED"
+    TREATMENT_SIMULATED = "TREATMENT_SIMULATED"
+    COMPLETED = "COMPLETED"
+    DISCHARGED = "DISCHARGED"
+    TERMINATED = "TERMINATED"
+
+
+class DoctorSpecialty(str, Enum):
+    EMERGENCY_MEDICINE = "Emergency Medicine"
+    TRAUMA = "Trauma"
+    CARDIOLOGY = "Cardiology"
+    NEUROLOGY = "Neurology"
+    GENERAL_MEDICINE = "General Medicine"
+
+
+class DiagnosticCategory(str, Enum):
+    CT = "CT"
+    MRI = "MRI"
+    XRAY = "X-Ray"
+    BLOOD_TEST = "Blood Test"
+    ULTRASOUND = "Ultrasound"
+
+
+class ResourceStatus(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    BUSY = "BUSY"
+    MAINTENANCE = "MAINTENANCE"
+    RESERVED = "RESERVED"
+
+
+class MessageType(str, Enum):
+    PATIENT_REGISTERED = "PATIENT_REGISTERED"
+    TRIAGE_REQUEST = "TRIAGE_REQUEST"
+    TRIAGE_COMPLETED = "TRIAGE_COMPLETED"
+    AMBULANCE_REQUEST = "AMBULANCE_REQUEST"
+    AMBULANCE_ASSIGNED = "AMBULANCE_ASSIGNED"
+    PATIENT_ARRIVING = "PATIENT_ARRIVING"
+    DOCTOR_REQUEST = "DOCTOR_REQUEST"
+    DOCTOR_ASSIGNED = "DOCTOR_ASSIGNED"
+    DIAGNOSTIC_REQUEST = "DIAGNOSTIC_REQUEST"
+    DIAGNOSTIC_ASSIGNED = "DIAGNOSTIC_ASSIGNED"
+    DIAGNOSTIC_COMPLETED = "DIAGNOSTIC_COMPLETED"
+    ICU_REQUEST = "ICU_REQUEST"
+    ICU_RESERVED = "ICU_RESERVED"
+    RESOURCE_UNAVAILABLE = "RESOURCE_UNAVAILABLE"
+    RESOURCE_RELEASED = "RESOURCE_RELEASED"
+    TREATMENT_STARTED = "TREATMENT_STARTED"
+    PATIENT_COMPLETED = "PATIENT_COMPLETED"
+    PATIENT_DISCHARGED = "PATIENT_DISCHARGED"
+
+
+class AllocationStrategy(str, Enum):
+    FIFO = "FIFO"
+    PRIORITY_AWARE = "PRIORITY_AWARE"

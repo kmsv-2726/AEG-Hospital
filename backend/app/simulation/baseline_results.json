@@ -1,0 +1,74 @@
+{
+  "workload_5": {
+    "FIFO": {
+      "strategy": "FIFO",
+      "total_patients": 5,
+      "completed_workflows": 5,
+      "completion_rate": 100.0,
+      "resource_conflicts": 4,
+      "unresolved_requests": 0,
+      "average_waiting_time": 2.54,
+      "average_time_to_doctor": 5.08,
+      "p1_average_wait_to_doctor": 0.0,
+      "p4_average_wait_to_doctor": 0.0,
+      "ambulance_utilization": 12.55,
+      "doctor_utilization": 16.4,
+      "diagnostic_utilization": 7.87,
+      "icu_utilization": 13.12,
+      "simulation_duration": 76.2
+    },
+    "PRIORITY_AWARE": {
+      "strategy": "PRIORITY_AWARE",
+      "total_patients": 5,
+      "completed_workflows": 5,
+      "completion_rate": 100.0,
+      "resource_conflicts": 4,
+      "unresolved_requests": 0,
+      "average_waiting_time": 2.54,
+      "average_time_to_doctor": 5.08,
+      "p1_average_wait_to_doctor": 0.0,
+      "p4_average_wait_to_doctor": 0.0,
+      "ambulance_utilization": 12.55,
+      "doctor_utilization": 16.4,
+      "diagnostic_utilization": 7.87,
+      "icu_utilization": 13.12,
+      "simulation_duration": 76.2
+    }
+  },
+  "workload_20": {
+    "FIFO": {
+      "strategy": "FIFO",
+      "total_patients": 20,
+      "completed_workflows": 20,
+      "completion_rate": 100.0,
+      "resource_conflicts": 44,
+      "unresolved_requests": 0,
+      "average_waiting_time": 27.83,
+      "average_time_to_doctor": 55.66,
+      "p1_average_wait_to_doctor": 38.09,
+      "p4_average_wait_to_doctor": 33.08,
+      "ambulance_utilization": 11.33,
+      "doctor_utilization": 16.34,
+      "diagnostic_utilization": 9.22,
+      "icu_utilization": 11.44,
+      "simulation_duration": 306.0
+    },
+    "PRIORITY_AWARE": {
+      "strategy": "PRIORITY_AWARE",
+      "total_patients": 20,
+      "completed_workflows": 20,
+      "completion_rate": 100.0,
+      "resource_conflicts": 60,
+      "unresolved_requests": 0,
+      "average_waiting_time": 27.96,
+      "average_time_to_doctor": 55.91,
+      "p1_average_wait_to_doctor": 27.37,
+      "p4_average_wait_to_doctor": 42.44,
+      "ambulance_utilization": 11.33,
+      "doctor_utilization": 16.34,
+      "diagnostic_utilization": 9.22,
+      "icu_utilization": 11.44,
+      "simulation_duration": 306.0
+    }
+  }
+}
