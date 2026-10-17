@@ -84,6 +84,8 @@ class SimulationEngine:
 
         # Register PCBs for patients
         for p in self.patients.values():
+            if p.get("workflow_state") != WorkflowState.REGISTERED.value:
+                continue
             self.coordinator.os_manager.register_patient_process(p, p.get("arrival_time", 0.0))
             self.schedule_event(
                 time=p.get("arrival_time", 0.0),
@@ -161,6 +163,9 @@ class SimulationEngine:
         # Step 2: Request Ambulance
         amb_result = self.coordinator.request_ambulance_allocation(patient, env)
         if amb_result.get("status") == "ALLOCATED":
+            self.coordinator.transition_patient(
+                patient, WorkflowState.IN_TRANSIT, self.current_time
+            )
             travel_time = amb_result.get("travel_time", 5.0)
             # Track ambulance busy time
             for amb in self.ambulances:
@@ -187,12 +192,21 @@ class SimulationEngine:
             return
 
         patient["hospital_arrival_time"] = self.current_time
-        patient["workflow_state"] = WorkflowState.ADMITTED.value
+        if patient["workflow_state"] == WorkflowState.IN_TRANSIT.value:
+            self.coordinator.transition_patient(
+                patient, WorkflowState.ARRIVED, self.current_time
+            )
+        self.coordinator.transition_patient(
+            patient, WorkflowState.ADMITTED, self.current_time
+        )
 
         # Release ambulance if one transported the patient
         if event.resource_id:
             self.coordinator.ambulance_agent.release_ambulance(
-                event.resource_id, self.ambulances, self.current_time
+                event.resource_id,
+                self.ambulances,
+                self.current_time,
+                expected_patient_id=patient["id"],
             )
             self.coordinator.os_manager.ambulance_semaphore.release(patient["id"])
             # Retry any waiting ambulances
@@ -219,6 +233,18 @@ class SimulationEngine:
         if not patient:
             return
 
+        if event.resource_id:
+            self.coordinator.doctor_agent.release_doctor(
+                event.resource_id,
+                self.doctors,
+                self.current_time,
+                expected_patient_id=patient["id"],
+            )
+            self.coordinator.release_doctor_mutex(
+                event.resource_id, patient["id"], self.current_time
+            )
+            self._retry_waiting_doctors(env)
+
         # Check if diagnostic required
         if patient.get("required_diagnostic"):
             diag_res = self.coordinator.request_diagnostic_allocation(patient, env)
@@ -244,12 +270,17 @@ class SimulationEngine:
             return
 
         patient["diagnostic_end_time"] = self.current_time
-        patient["workflow_state"] = WorkflowState.DIAGNOSTICS_COMPLETED.value
+        self.coordinator.transition_patient(
+            patient, WorkflowState.DIAGNOSTICS_COMPLETED, self.current_time
+        )
 
         # Release diagnostic resource
         if event.resource_id:
             self.coordinator.diagnostic_agent.release_diagnostic(
-                event.resource_id, self.diagnostic_resources, self.current_time
+                event.resource_id,
+                self.diagnostic_resources,
+                self.current_time,
+                expected_patient_id=patient["id"],
             )
             self.coordinator.release_diagnostic_mutex(event.resource_id, patient["id"], self.current_time)
             self._retry_waiting_diagnostics(env)
@@ -267,7 +298,9 @@ class SimulationEngine:
                     if bed["id"] == icu_res["icu_bed_id"]:
                         bed["total_busy_time"] = bed.get("total_busy_time", 0.0) + treatment_duration
 
-                patient["workflow_state"] = WorkflowState.TREATMENT_SIMULATED.value
+                self.coordinator.transition_patient(
+                    patient, WorkflowState.TREATMENT_SIMULATED, self.current_time
+                )
                 patient["treatment_start_time"] = self.current_time
                 self.schedule_event(
                     time=self.current_time + treatment_duration,
@@ -275,7 +308,9 @@ class SimulationEngine:
                     patient_id=patient["id"],
                 )
         else:
-            patient["workflow_state"] = WorkflowState.TREATMENT_SIMULATED.value
+            self.coordinator.transition_patient(
+                patient, WorkflowState.TREATMENT_SIMULATED, self.current_time
+            )
             patient["treatment_start_time"] = self.current_time
             self.schedule_event(
                 time=self.current_time + treatment_duration,
@@ -289,19 +324,19 @@ class SimulationEngine:
             return
 
         patient["completion_time"] = self.current_time
-        patient["workflow_state"] = WorkflowState.COMPLETED.value
-
-        # Release doctor
-        doc_id = patient.get("assigned_doctor_id")
-        if doc_id:
-            self.coordinator.doctor_agent.release_doctor(doc_id, self.doctors, self.current_time)
-            self.coordinator.release_doctor_mutex(doc_id, patient["id"], self.current_time)
-            self._retry_waiting_doctors(env)
+        self.coordinator.transition_patient(
+            patient, WorkflowState.COMPLETED, self.current_time
+        )
 
         # Release ICU bed if occupied
         bed_id = patient.get("assigned_icu_bed_id")
         if bed_id:
-            self.coordinator.icu_agent.release_bed(bed_id, self.icu_beds, self.current_time)
+            self.coordinator.icu_agent.release_bed(
+                bed_id,
+                self.icu_beds,
+                self.current_time,
+                expected_patient_id=patient["id"],
+            )
             self.coordinator.release_icu_semaphore(patient["id"])
             self._retry_waiting_icu(env)
 
@@ -314,7 +349,9 @@ class SimulationEngine:
     def _handle_patient_discharged(self, event: SimEvent, env: Dict[str, Any]):
         patient = self.patients.get(event.patient_id)
         if patient:
-            patient["workflow_state"] = WorkflowState.DISCHARGED.value
+            self.coordinator.transition_patient(
+                patient, WorkflowState.DISCHARGED, self.current_time
+            )
             self.coordinator.complete_patient_process(patient["id"], self.current_time)
             self.coordinator.emit_event(
                 simulation_time=self.current_time,
@@ -328,11 +365,19 @@ class SimulationEngine:
     # -------------------------------------------------------------
 
     def _retry_waiting_ambulances(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_ambulances, self.patients, self.current_time)
+        sorted_pids = self.coordinator.sort_waiting_queue(
+            self.coordinator.waiting_ambulances,
+            self.patients,
+            self.current_time,
+            request_time_field="arrival_time",
+        )
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_ambulance_allocation(p, env)
             if res.get("status") == "ALLOCATED":
+                self.coordinator.transition_patient(
+                    p, WorkflowState.IN_TRANSIT, self.current_time
+                )
                 travel_time = res.get("travel_time", 5.0)
                 for amb in self.ambulances:
                     if amb["id"] == res["ambulance_id"]:
@@ -346,7 +391,12 @@ class SimulationEngine:
                 break
 
     def _retry_waiting_doctors(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_doctors, self.patients, self.current_time)
+        sorted_pids = self.coordinator.sort_waiting_queue(
+            self.coordinator.waiting_doctors,
+            self.patients,
+            self.current_time,
+            request_time_field="doctor_request_time",
+        )
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_doctor_allocation(p, env)
@@ -364,7 +414,12 @@ class SimulationEngine:
                 break
 
     def _retry_waiting_diagnostics(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_diagnostics, self.patients, self.current_time)
+        sorted_pids = self.coordinator.sort_waiting_queue(
+            self.coordinator.waiting_diagnostics,
+            self.patients,
+            self.current_time,
+            request_time_field="diagnostic_request_time",
+        )
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_diagnostic_allocation(p, env)
@@ -382,7 +437,12 @@ class SimulationEngine:
                 break
 
     def _retry_waiting_icu(self, env: Dict[str, Any]):
-        sorted_pids = self.coordinator.sort_waiting_queue(self.coordinator.waiting_icu, self.patients, self.current_time)
+        sorted_pids = self.coordinator.sort_waiting_queue(
+            self.coordinator.waiting_icu,
+            self.patients,
+            self.current_time,
+            request_time_field="icu_request_time",
+        )
         for pid in sorted_pids:
             p = self.patients[pid]
             res = self.coordinator.request_icu_allocation(p, env)
@@ -391,7 +451,9 @@ class SimulationEngine:
                 for bed in self.icu_beds:
                     if bed["id"] == res["icu_bed_id"]:
                         bed["total_busy_time"] = bed.get("total_busy_time", 0.0) + treatment_duration
-                p["workflow_state"] = WorkflowState.TREATMENT_SIMULATED.value
+                self.coordinator.transition_patient(
+                    p, WorkflowState.TREATMENT_SIMULATED, self.current_time
+                )
                 p["treatment_start_time"] = self.current_time
                 self.schedule_event(
                     time=self.current_time + treatment_duration,

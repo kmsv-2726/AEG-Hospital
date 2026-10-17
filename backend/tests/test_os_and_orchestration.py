@@ -9,6 +9,7 @@ from backend.app.models.os_primitives import HospitalOSManager, ProcessState, Co
 from backend.app.coordinator.message_bus import AgentMessageBus
 from backend.app.models.enums import MessageType
 
+sim_service.initialize()
 client = TestClient(app)
 
 

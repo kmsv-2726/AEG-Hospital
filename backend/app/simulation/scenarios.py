@@ -128,18 +128,21 @@ DEMO_RESOURCES: Dict[str, List[Dict[str, Any]]] = {
             "unit_name": "Critical Care Bay 1",
             "status": ResourceStatus.AVAILABLE.value,
             "has_ventilator": True,
+            "has_monitoring": True,
         },
         {
             "id": "ICU-BED-02",
             "unit_name": "Critical Care Bay 2",
             "status": ResourceStatus.AVAILABLE.value,
             "has_ventilator": True,
+            "has_monitoring": True,
         },
         {
             "id": "ICU-BED-03",
             "unit_name": "Critical Care Bay 3",
             "status": ResourceStatus.AVAILABLE.value,
             "has_ventilator": False,
+            "has_monitoring": True,
         },
     ],
 }

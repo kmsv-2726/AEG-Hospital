@@ -37,6 +37,8 @@ class ICUAgent(BaseAgent):
         return {
             "patient_id": patient.get("id"),
             "requires_icu": patient.get("requires_icu", False),
+            "requires_ventilator": patient.get("requires_ventilator", False),
+            "required_icu_equipment": patient.get("required_icu_equipment", []),
             "priority": patient.get("priority", "P3"),
             "beds": beds,
         }
@@ -52,40 +54,90 @@ class ICUAgent(BaseAgent):
 
         patient_id = percepts["patient_id"]
         priority = percepts.get("priority")
+        required_equipment = {
+            item.strip().casefold()
+            for item in percepts.get("required_icu_equipment", [])
+            if item.strip()
+        }
+        if percepts.get("requires_ventilator"):
+            required_equipment.add("ventilator")
 
-        eligible = [
-            b for b in percepts["beds"]
-            if b.get("status") == ResourceStatus.AVAILABLE.value
-        ]
+        candidates = []
+        eligible = []
+        for bed in percepts["beds"]:
+            reasons = []
+            if bed.get("status") != ResourceStatus.AVAILABLE.value:
+                reasons.append("not available")
+            capabilities = set()
+            if bed.get("has_ventilator"):
+                capabilities.add("ventilator")
+            if bed.get("has_monitoring", True):
+                capabilities.add("monitoring")
+            missing = required_equipment - capabilities
+            if missing:
+                reasons.append(f"missing equipment: {', '.join(sorted(missing))}")
+            urgency_bonus = 20.0 if priority == PriorityLevel.P1.value and "ventilator" in capabilities else 0.0
+            item = {
+                "resource_id": bed["id"],
+                "available": bed.get("status") == ResourceStatus.AVAILABLE.value,
+                "eligible": not reasons,
+                "rejection_reasons": reasons,
+                "capabilities": sorted(capabilities),
+                "urgency_bonus": urgency_bonus if not reasons else None,
+                "score": urgency_bonus if not reasons else None,
+            }
+            candidates.append(item)
+            if not reasons:
+                eligible.append((urgency_bonus, bed["id"], bed, item))
 
         if not eligible:
             return {
                 "action": "CONFLICT_WAITING",
                 "patient_id": patient_id,
-                "reason": "All ICU beds are currently occupied. Request queued for next available bed.",
+                "candidates": candidates,
+                "reason": "No available ICU bed satisfies the configured equipment requirements. Request queued.",
             }
 
-        # If P1, prefer ventilator beds
-        if priority == PriorityLevel.P1.value:
-            vent_beds = [b for b in eligible if b.get("has_ventilator")]
-            if vent_beds:
-                eligible = vent_beds
-
-        eligible.sort(key=lambda b: b["id"])
-        selected_bed = eligible[0]
+        eligible.sort(key=lambda item: (-item[0], item[1]))
+        ranked = [
+            {**candidate, "rank": rank}
+            for rank, (_, _, _, candidate) in enumerate(eligible, start=1)
+        ]
+        selected_bed = eligible[0][2]
 
         return {
             "action": "ALLOCATE",
             "patient_id": patient_id,
             "bed": selected_bed,
-            "reason": f"Allocated ICU bed {selected_bed['id']} (Ventilator: {selected_bed.get('has_ventilator', False)}).",
+            "candidates": [*ranked, *(item for item in candidates if not item["eligible"])],
+            "reason": (
+                f"Selected bed {selected_bed['id']} among beds meeting equipment requirements; "
+                f"P1 ventilator preference bonus={eligible[0][0]:g}; ties use bed ID."
+            ),
         }
 
     def act(self, decision: Dict[str, Any], environment_state: Dict[str, Any]) -> Dict[str, Any]:
         """Reserve ICU bed or emit conflict event."""
         sim_time = environment_state.get("simulation_time", 0.0)
-        patient_id = decision.get("patient_id")
+        patient_id = environment_state.get("patient", {}).get(
+            "id", decision.get("patient_id")
+        )
         action = decision.get("action")
+        if action == "ALLOCATE" and not self.reserve_resource(
+            decision["bed"], patient_id
+        ):
+            refreshed = self.decide(self.perceive(environment_state))
+            if refreshed.get("action") == "ALLOCATE" and self.reserve_resource(
+                refreshed["bed"], patient_id
+            ):
+                decision = refreshed
+            else:
+                decision = {
+                    **refreshed,
+                    "action": "CONFLICT_WAITING",
+                    "reason": "Selected ICU bed became unavailable; no other eligible bed remained.",
+                }
+                action = decision["action"]
 
         if action == "ALLOCATE":
             bed = decision["bed"]
@@ -151,14 +203,22 @@ class ICUAgent(BaseAgent):
 
         return {"status": "NOT_REQUIRED"}
 
-    def release_bed(self, bed_id: str, beds: List[Dict[str, Any]], simulation_time: float = 0.0):
+    def release_bed(
+        self,
+        bed_id: str,
+        beds: List[Dict[str, Any]],
+        simulation_time: float = 0.0,
+        expected_patient_id: Optional[str] = None,
+    ):
         """Release and sanitize ICU bed upon patient discharge or step-down."""
         sim_time = simulation_time
         for bed in beds:
             if bed["id"] == bed_id:
                 released_pid = bed.get("current_patient_id")
-                bed["status"] = ResourceStatus.AVAILABLE.value
-                bed["current_patient_id"] = None
+                if expected_patient_id and released_pid != expected_patient_id:
+                    return None
+                if not self.release_resource(bed, expected_patient_id or released_pid):
+                    return None
                 bed["release_timestamp"] = sim_time
                 if released_pid and released_pid in self.active_patients:
                     self.active_patients.remove(released_pid)

@@ -44,106 +44,28 @@ export default function OrchestrationModal({ isOpen, onClose, patient, events = 
   const pcb = orchestrationData?.pcb;
   const messages = orchestrationData?.agent_messages || [];
 
-  // Define fallback or enhanced multi-agent pipeline steps
-  const steps = [
-    {
-      agent: 'HospitalCoordinator',
-      title: 'Intake & PCB Initialization',
-      icon: ShieldAlert,
-      color: '#06b6d4',
-      completed: true,
-      detail: `Registered ${patient.name} (${patient.id}). Initialized OS Process Control Block (PCB) and routed to intake queue.`,
-    },
-    {
-      agent: 'TriageAgent',
-      title: 'Deterministic Urgency Stratification',
-      icon: Bot,
-      color: patient.priority === 'P1' ? '#ef4444' : patient.priority === 'P2' ? '#f59e0b' : '#38bdf8',
-      completed: true,
-      detail: `Rule-based evaluation matched "${patient.severity_category}". Dispatched priority: ${patient.priority}.`,
-      badge: patient.priority,
-    },
-    {
-      agent: 'AmbulanceAgent',
-      title: 'Fleet Utility Dispatch',
-      icon: Ambulance,
-      color: '#06b6d4',
-      completed: !!patient.assigned_ambulance_id || !patient.requires_ambulance,
-      detail: patient.assigned_ambulance_id 
-        ? `Utility-ranked dispatch allocated unit (${patient.assigned_ambulance_id}). Transit ETA dispatched.`
-        : patient.requires_ambulance
-        ? 'Fleet busy. Patient entered Ambulance Blocked Queue.'
-        : 'Walk-in / Ambulatory emergency. Ambulance transit skipped.',
-      resource: patient.assigned_ambulance_id,
-    },
-    {
-      agent: 'DoctorAgent',
-      title: 'Specialty Staffing & Mutex Allocation',
-      icon: Stethoscope,
-      color: '#818cf8',
-      completed: !!patient.assigned_doctor_id,
-      detail: patient.assigned_doctor_id
-        ? `Matched clinical specialty "${patient.required_specialty}". Acquired physician mutex (${patient.assigned_doctor_id}).`
-        : `Specialty "${patient.required_specialty}" contention. Patient entered Doctor Ready Queue.`,
-      resource: patient.assigned_doctor_id,
-    },
-    {
-      agent: 'DiagnosticAgent',
-      title: 'Diagnostic Imaging & Scanner Mutex',
-      icon: Activity,
-      color: '#34d399',
-      completed: !!patient.assigned_diagnostic_id || !patient.required_diagnostic,
-      detail: patient.assigned_diagnostic_id
-        ? `Locked scanner (${patient.assigned_diagnostic_id}) for required ${patient.required_diagnostic}.`
-        : patient.required_diagnostic
-        ? `Required ${patient.required_diagnostic} busy. Blocked on diagnostic mutex.`
-        : 'No imaging required for this clinical care pathway.',
-      resource: patient.assigned_diagnostic_id,
-    },
-    {
-      agent: 'ICUAgent',
-      title: 'Critical Bed Semaphore Allocation',
-      icon: Bed,
-      color: '#f87171',
-      completed: !!patient.assigned_icu_bed_id || !patient.requires_icu,
-      detail: patient.assigned_icu_bed_id
-        ? `Acquired ICU counting semaphore permit (${patient.assigned_icu_bed_id}) with ventilator monitoring.`
-        : patient.requires_icu
-        ? 'All ICU beds occupied. Blocked on ICU counting semaphore.'
-        : 'Non-ICU standard care pathway.',
-      resource: patient.assigned_icu_bed_id,
-    },
-  ];
+  const trace = orchestrationData?.patient?.decision_trace || patient.decision_trace || [];
+  const agentIcons = {
+    HospitalCoordinator: ShieldAlert,
+    TriageAgent: Bot,
+    AmbulanceAgent: Ambulance,
+    DoctorAgent: Stethoscope,
+    DiagnosticAgent: Activity,
+    ICUAgent: Bed,
+  };
+  const steps = trace.map((entry) => ({
+    ...entry,
+    icon: agentIcons[entry.agent] || Bot,
+    title: entry.action,
+    detail: entry.description,
+    color: entry.status === 'SKIPPED' ? '#64748b'
+      : entry.status === 'WAITING' || entry.status === 'REVIEW_REQUIRED' ? '#b45309'
+        : '#0f766e',
+  }));
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(0, 0, 0, 0.85)',
-      backdropFilter: 'blur(10px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 110,
-      padding: '20px'
-    }}>
-      <div className="glass-panel" style={{
-        width: '100%',
-        maxWidth: '820px',
-        maxHeight: '92vh',
-        background: '#090d16',
-        border: '1px solid rgba(6, 182, 212, 0.4)',
-        borderRadius: '20px',
-        padding: '24px 28px',
-        boxShadow: '0 25px 60px rgba(0,0,0,0.85)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '16px',
-        overflowY: 'auto'
-      }}>
+    <div className="modal-backdrop">
+      <div className="modal-panel orchestration-panel">
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -161,7 +83,7 @@ export default function OrchestrationModal({ isOpen, onClose, patient, events = 
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#fff' }}>
-                  Live Multi-Agent Orchestration & OS Manager
+                  Recorded agent decisions & resource state
                 </h3>
                 <span className={`badge-priority-${patient.priority.toLowerCase()}`} style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem' }}>
                   {patient.priority}
@@ -200,7 +122,7 @@ export default function OrchestrationModal({ isOpen, onClose, patient, events = 
             }}
           >
             <Layers size={15} />
-            <span>Agent Pipeline</span>
+            <span>Decision trace</span>
           </button>
 
           <button
@@ -247,8 +169,13 @@ export default function OrchestrationModal({ isOpen, onClose, patient, events = 
         {/* Content based on active tab */}
         {activeView === 'pipeline' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {loading && <div className="empty-state">Loading recorded decisions…</div>}
+            {!loading && steps.length === 0 && (
+              <div className="empty-state">No decision trace has been recorded for this patient yet.</div>
+            )}
             {steps.map((step, idx) => {
               const Icon = step.icon;
+              const candidates = step.details?.candidates || [];
               return (
                 <div 
                   key={idx}
@@ -280,16 +207,33 @@ export default function OrchestrationModal({ isOpen, onClose, patient, events = 
                         <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff' }}>{step.agent}</span>
                         <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', background: 'rgba(0,0,0,0.3)', padding: '1px 6px', borderRadius: '4px' }}>{step.title}</span>
                       </div>
-                      {step.completed && (
-                        <span style={{ fontSize: '0.7rem', color: '#34d399', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <CheckCircle2 size={13} />
-                          <span>ACTIVE / ASSIGNED</span>
-                        </span>
-                      )}
+                      <span className={`trace-status trace-status-${String(step.status).toLowerCase().replaceAll('_', '-')}`}>
+                        {step.status}
+                      </span>
                     </div>
                     <div style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
                       {step.detail}
                     </div>
+                    {Object.keys(step.details || {}).length > 0 && (
+                      <details style={{ marginTop: '8px' }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>
+                          Decision inputs and resource evaluation
+                        </summary>
+                        {candidates.length > 0 ? (
+                          <div className="trace-candidates">
+                            {candidates.map((candidate) => (
+                              <div className="trace-candidate" key={candidate.resource_id}>
+                                <strong>{candidate.rank ? `${candidate.rank}. ` : ''}{candidate.resource_id}</strong>
+                                <span>{candidate.eligible ? 'Eligible' : (candidate.rejection_reasons || []).join(', ')}</span>
+                                {candidate.score !== null && candidate.score !== undefined && <b>Score {candidate.score}</b>}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <pre className="trace-json">{JSON.stringify(step.details, null, 2)}</pre>
+                        )}
+                      </details>
+                    )}
                   </div>
                 </div>
               );

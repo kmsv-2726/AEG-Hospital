@@ -53,22 +53,48 @@ class DiagnosticAgent(BaseAgent):
         if not category:
             return {"action": "NOT_REQUIRED", "patient_id": patient_id}
 
-        eligible = [
-            res for res in percepts["resources"]
-            if res.get("status") == ResourceStatus.AVAILABLE.value
-            and res.get("category") == category
-        ]
+        candidates = []
+        eligible = []
+        for resource in percepts["resources"]:
+            reasons = []
+            if resource.get("status") != ResourceStatus.AVAILABLE.value:
+                reasons.append("not available")
+            if resource.get("category") != category:
+                reasons.append(f"diagnostic mismatch: {resource.get('category')}")
+            duration = resource.get("simulated_duration", 15.0)
+            queue_length = resource.get("queue_length", 0)
+            estimated_completion = duration * (queue_length + 1)
+            score = -estimated_completion
+            item = {
+                "resource_id": resource["id"],
+                "category": resource.get("category"),
+                "available": resource.get("status") == ResourceStatus.AVAILABLE.value,
+                "eligible": not reasons,
+                "rejection_reasons": reasons,
+                "queue_length": queue_length,
+                "processing_minutes": duration,
+                "estimated_completion_minutes": estimated_completion,
+                "score": score if not reasons else None,
+            }
+            candidates.append(item)
+            if not reasons:
+                eligible.append((score, resource.get("queue_length", 0), duration, resource["id"], resource, item))
 
         if not eligible:
             return {
                 "action": "CONFLICT_WAITING",
                 "patient_id": patient_id,
                 "category": category,
+                "candidates": candidates,
                 "reason": f"Diagnostic resource '{category}' is currently busy or unavailable. Request queued.",
             }
 
-        eligible.sort(key=lambda r: (r.get("queue_length", 0), r.get("simulated_duration", 15.0), r["id"]))
-        selected_res = eligible[0]
+        eligible.sort(key=lambda item: (-item[0], item[1], item[2], item[3]))
+        ranked = [
+            {**candidate, "rank": rank}
+            for rank, (*_, candidate) in enumerate(eligible, start=1)
+        ]
+        selected_res = eligible[0][4]
         duration = selected_res.get("simulated_duration", 15.0)
 
         return {
@@ -76,14 +102,36 @@ class DiagnosticAgent(BaseAgent):
             "patient_id": patient_id,
             "resource": selected_res,
             "duration": duration,
-            "reason": f"Allocated available {category} scanner ({selected_res['id']}). Duration: {duration} mins.",
+            "candidates": [*ranked, *(item for item in candidates if not item["eligible"])],
+            "reason": (
+                f"Selected {category} unit {selected_res['id']} by minimum estimated completion "
+                f"time ({duration:g} × (queue {selected_res.get('queue_length', 0)} + 1) minutes); "
+                "ties use queue length, processing time, then resource ID."
+            ),
         }
 
     def act(self, decision: Dict[str, Any], environment_state: Dict[str, Any]) -> Dict[str, Any]:
         """Reserve diagnostic equipment or emit conflict event."""
         sim_time = environment_state.get("simulation_time", 0.0)
-        patient_id = decision.get("patient_id")
+        patient_id = environment_state.get("patient", {}).get(
+            "id", decision.get("patient_id")
+        )
         action = decision.get("action")
+        if action == "ALLOCATE" and not self.reserve_resource(
+            decision["resource"], patient_id
+        ):
+            refreshed = self.decide(self.perceive(environment_state))
+            if refreshed.get("action") == "ALLOCATE" and self.reserve_resource(
+                refreshed["resource"], patient_id
+            ):
+                decision = refreshed
+            else:
+                decision = {
+                    **refreshed,
+                    "action": "CONFLICT_WAITING",
+                    "reason": "Selected diagnostic unit became unavailable; no other eligible unit remained.",
+                }
+                action = decision["action"]
 
         if action == "ALLOCATE":
             res = decision["resource"]
@@ -151,15 +199,21 @@ class DiagnosticAgent(BaseAgent):
         return {"status": "NOT_REQUIRED"}
 
     def release_diagnostic(
-        self, resource_id: str, resources: List[Dict[str, Any]], simulation_time: float = 0.0
+        self,
+        resource_id: str,
+        resources: List[Dict[str, Any]],
+        simulation_time: float = 0.0,
+        expected_patient_id: Optional[str] = None,
     ):
         """Release diagnostic scanner equipment upon scan completion."""
         sim_time = simulation_time
         for res in resources:
             if res["id"] == resource_id:
                 released_pid = res.get("current_patient_id")
-                res["status"] = ResourceStatus.AVAILABLE.value
-                res["current_patient_id"] = None
+                if expected_patient_id and released_pid != expected_patient_id:
+                    return None
+                if not self.release_resource(res, expected_patient_id or released_pid):
+                    return None
                 res["availability_timestamp"] = sim_time
                 if released_pid and released_pid in self.active_patients:
                     self.active_patients.remove(released_pid)

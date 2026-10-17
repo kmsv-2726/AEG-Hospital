@@ -34,12 +34,16 @@ def calculate_simulation_metrics(
     # 1. Ambulance Response Times
     # response_time = ambulance_arrival_time - emergency_request_time
     response_times = []
+    ambulance_wait_times = []
     for p in patients:
         if p.get("requires_ambulance") and p.get("hospital_arrival_time") is not None:
             # Emergency request time is arrival_time
             req_time = p.get("arrival_time", 0.0)
             arr_time = p.get("hospital_arrival_time")
             response_times.append(arr_time - req_time)
+            dispatch_time = p.get("ambulance_dispatch_time")
+            if dispatch_time is not None:
+                ambulance_wait_times.append(max(0.0, dispatch_time - req_time))
 
     avg_response_time = (sum(response_times) / len(response_times)) if response_times else None
 
@@ -48,7 +52,10 @@ def calculate_simulation_metrics(
     doctor_times = []
     for p in patients:
         if p.get("doctor_assignment_time") is not None and p.get("hospital_arrival_time") is not None:
-            diff = max(0.0, p["doctor_assignment_time"] - p["hospital_arrival_time"])
+            request_time = p.get("doctor_request_time")
+            if request_time is None:
+                request_time = p["hospital_arrival_time"]
+            diff = max(0.0, p["doctor_assignment_time"] - request_time)
             doctor_times.append(diff)
 
     avg_time_to_doctor = (sum(doctor_times) / len(doctor_times)) if doctor_times else None
@@ -74,7 +81,7 @@ def calculate_simulation_metrics(
     avg_time_to_icu = (sum(icu_times) / len(icu_times)) if icu_times else None
 
     # Aggregate Waiting Times (all queues combined)
-    all_wait_times = doctor_times + diagnostic_times + icu_times
+    all_wait_times = ambulance_wait_times + doctor_times + diagnostic_times + icu_times
     avg_waiting_time = (sum(all_wait_times) / len(all_wait_times)) if all_wait_times else None
 
     # Resource Utilization %: busy_time / total_available_time * 100
@@ -117,6 +124,7 @@ def calculate_simulation_metrics(
 
     return MetricsSummary(
         average_waiting_time=round(avg_waiting_time, 2) if avg_waiting_time is not None else None,
+        average_ambulance_wait=round(sum(ambulance_wait_times) / len(ambulance_wait_times), 2) if ambulance_wait_times else None,
         average_ambulance_response_time=round(avg_response_time, 2) if avg_response_time is not None else None,
         average_time_to_doctor=round(avg_time_to_doctor, 2) if avg_time_to_doctor is not None else None,
         average_time_to_diagnostics=round(avg_time_to_diagnostics, 2) if avg_time_to_diagnostics is not None else None,
@@ -134,6 +142,7 @@ def calculate_simulation_metrics(
         simulation_duration=round(simulation_duration, 2),
         detailed_observations={
             "response_times": response_times,
+            "ambulance_wait_times": ambulance_wait_times,
             "doctor_times": doctor_times,
             "diagnostic_times": diagnostic_times,
             "icu_times": icu_times,

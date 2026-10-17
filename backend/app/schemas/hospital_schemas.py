@@ -2,8 +2,9 @@
 Pydantic schemas for data validation and API request/response serialization.
 """
 from __future__ import annotations
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+import re
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from backend.app.models.enums import (
     PriorityLevel,
     WorkflowState,
@@ -35,13 +36,41 @@ class PatientBase(BaseModel):
     age: int = Field(default=35, ge=0, le=120)
     gender: str = Field(default="Unknown")
     condition_description: str = Field(..., description="Reported symptoms / condition")
+    emergency_type: Optional[str] = Field(default=None, max_length=100)
+    chief_complaint: Optional[str] = Field(default=None, max_length=255)
+    symptoms: Optional[str] = Field(default=None, max_length=1000)
+    heart_rate: Optional[int] = Field(default=None, ge=0, le=300)
+    oxygen_saturation: Optional[float] = Field(default=None, ge=0, le=100)
+    blood_pressure: Optional[str] = Field(default=None, max_length=32)
     severity_category: str = Field(..., description="e.g. Critical trauma, Cardiac arrest")
     priority: PriorityLevel = Field(default=PriorityLevel.P3)
+    triage_mode: Literal["AUTO", "PROVIDED"] = "AUTO"
     requires_ambulance: bool = Field(default=True)
+    required_equipment: List[str] = Field(default_factory=list, max_length=8)
     required_specialty: DoctorSpecialty = Field(default=DoctorSpecialty.GENERAL_MEDICINE)
     required_diagnostic: Optional[DiagnosticCategory] = Field(default=None)
     requires_icu: bool = Field(default=False)
+    required_icu_equipment: List[str] = Field(default_factory=list, max_length=4)
+    requires_ventilator: bool = Field(default=False)
     arrival_time: float = Field(default=0.0, ge=0.0)
+
+    @field_validator("blood_pressure")
+    @classmethod
+    def validate_blood_pressure(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        match = re.fullmatch(r"\s*(\d{2,3})\s*/\s*(\d{2,3})\s*", value)
+        if not match:
+            raise ValueError("Blood pressure must use systolic/diastolic format, e.g. 120/80")
+        systolic, diastolic = (int(part) for part in match.groups())
+        if not 40 <= systolic <= 300 or not 20 <= diastolic <= 200:
+            raise ValueError("Blood pressure values are outside the supported synthetic input range")
+        return f"{systolic}/{diastolic}"
+
+    @field_validator("required_equipment", "required_icu_equipment")
+    @classmethod
+    def normalize_equipment(cls, values: List[str]) -> List[str]:
+        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
 class PatientCreate(PatientBase):
@@ -50,6 +79,8 @@ class PatientCreate(PatientBase):
 
 class PatientRead(PatientBase):
     workflow_state: WorkflowState
+    triage_reason: Optional[str] = None
+    triage_requires_review: bool = False
     assigned_ambulance_id: Optional[str] = None
     assigned_doctor_id: Optional[str] = None
     assigned_diagnostic_id: Optional[str] = None
@@ -66,6 +97,7 @@ class PatientRead(PatientBase):
     treatment_start_time: Optional[float] = None
     completion_time: Optional[float] = None
     waiting_duration: float = 0.0
+    decision_trace: List[Dict[str, Any]] = Field(default_factory=list)
     orchestration_events: Optional[List[SimulationEventSchema]] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
@@ -118,6 +150,7 @@ class ICUBedRead(BaseModel):
     unit_name: str
     status: ResourceStatus
     has_ventilator: bool
+    has_monitoring: bool = True
     current_patient_id: Optional[str] = None
     reservation_timestamp: Optional[float] = None
     release_timestamp: Optional[float] = None
@@ -175,6 +208,7 @@ class SimulationResetRequest(BaseModel):
 
 class MetricsSummary(BaseModel):
     average_waiting_time: Optional[float] = None
+    average_ambulance_wait: Optional[float] = None
     average_ambulance_response_time: Optional[float] = None
     average_time_to_doctor: Optional[float] = None
     average_time_to_diagnostics: Optional[float] = None

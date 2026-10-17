@@ -3,6 +3,7 @@ Unit tests for BaseAgent class.
 """
 from typing import Dict, Any
 from backend.app.agents.base_agent import BaseAgent
+from backend.app.coordinator.message_bus import AgentMessageBus
 from backend.app.models.enums import MessageType
 
 
@@ -49,6 +50,8 @@ def test_base_agent_lifecycle():
 
 def test_base_agent_messaging():
     agent = MockAgent()
+    message_bus = AgentMessageBus()
+    agent.set_message_bus(message_bus)
     msg = agent.send_message(
         receiver="HospitalCoordinator",
         message_type=MessageType.TRIAGE_COMPLETED,
@@ -59,4 +62,7 @@ def test_base_agent_messaging():
     assert msg.sender == "MockAgent"
     assert msg.receiver == "HospitalCoordinator"
     assert len(agent.outbox) == 1
+    assert len(message_bus.message_history) == 1
+    assert message_bus.message_history[0].message_id == msg.message_id
+    assert message_bus.message_history[0].correlation_id == msg.correlation_id
     assert "Sent TRIAGE_COMPLETED" in agent.last_message

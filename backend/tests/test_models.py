@@ -16,6 +16,7 @@ from backend.app.schemas.hospital_schemas import (
     SimulationEventSchema,
     MetricsSummary,
 )
+from pydantic import ValidationError
 from backend.app.models.entities import (
     PatientModel,
     AmbulanceModel,
@@ -54,6 +55,30 @@ def test_patient_pydantic_schema():
     assert patient.id == "P001"
     assert patient.priority == PriorityLevel.P1
     assert patient.required_specialty == DoctorSpecialty.TRAUMA
+
+
+def test_patient_optional_inputs_are_validated_and_normalized():
+    patient = PatientCreate(
+        id="CLI-CASE-01",
+        name="Synthetic Case",
+        condition_description="Synthetic case details",
+        severity_category="Unclassified",
+        emergency_type="General emergency",
+        chief_complaint="Reported concern",
+        blood_pressure=" 120 / 80 ",
+        required_equipment=[" ALS ", "", "ALS"],
+    )
+
+    assert patient.blood_pressure == "120/80"
+    assert patient.required_equipment == ["ALS"]
+    with pytest.raises(ValidationError):
+        PatientCreate(
+            id="CLI-CASE-02",
+            name="Invalid Blood Pressure",
+            condition_description="Synthetic case details",
+            severity_category="Unclassified",
+            blood_pressure="not-a-value",
+        )
 
 
 def test_agent_message_schema():

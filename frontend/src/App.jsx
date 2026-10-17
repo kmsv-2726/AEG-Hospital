@@ -9,6 +9,10 @@ import EventTimelinePage from './pages/EventTimelinePage';
 import MetricsPage from './pages/MetricsPage';
 import api from './services/api';
 
+function getApiErrorMessage(error) {
+  return error.response?.data?.detail || error.message || 'Unknown API error';
+}
+
 export default function App() {
   const queryParams = new URLSearchParams(window.location.search);
   const [activeTab, setActiveTab] = useState(queryParams.get('tab') || 'overview');
@@ -52,7 +56,11 @@ export default function App() {
       if (base.status === 'fulfilled') setBaselineData(base.value);
       if (os.status === 'fulfilled') setOsStatus(os.value);
       if (msgs.status === 'fulfilled') setMessages(msgs.value);
-      setErrorMsg(null);
+      const failedRequest = [pts, rsc, ags, evts, met, base, os, msgs]
+        .find((result) => result.status === 'rejected');
+      setErrorMsg(failedRequest
+        ? failedRequest.reason?.response?.data?.detail || failedRequest.reason?.message || 'Some hospital state could not be refreshed.'
+        : null);
     } catch (err) {
       console.error('Failed to sync simulation state:', err);
       setErrorMsg('Cannot connect to FastAPI backend at http://127.0.0.1:8000. Please ensure the backend is running.');
@@ -63,6 +71,11 @@ export default function App() {
     refreshData();
   }, [refreshData]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(refreshData, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshData]);
+
   const handleRunSimulation = async () => {
     try {
       setIsRunning(true);
@@ -70,7 +83,7 @@ export default function App() {
       await refreshData();
     } catch (err) {
       console.error('Simulation execution error:', err);
-      alert('Error running simulation: ' + err.message);
+      alert('Error running simulation: ' + getApiErrorMessage(err));
     } finally {
       setIsRunning(false);
     }
@@ -97,9 +110,10 @@ export default function App() {
       // Immediately open the live AI orchestration modal for the user
       setSelectedPatientForOrchestration(createdPatient);
       setIsOrchestrationModalOpen(true);
+      return createdPatient;
     } catch (err) {
       console.error('Emergency submission error:', err);
-      alert('Failed to register emergency: ' + err.message);
+      throw err;
     } finally {
       setIsRunning(false);
     }
@@ -111,7 +125,7 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="app-shell">
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -124,19 +138,12 @@ export default function App() {
       />
 
       {errorMsg && (
-        <div style={{
-          background: 'rgba(239, 68, 68, 0.15)',
-          borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
-          color: '#fca5a5',
-          padding: '10px 24px',
-          fontSize: '0.825rem',
-          textAlign: 'center',
-        }}>
+        <div className="app-error" role="alert">
           {errorMsg}
         </div>
       )}
 
-      <main style={{ flex: 1, maxWidth: '1440px', width: '100%', margin: '0 auto', padding: '24px 24px 60px 24px' }}>
+      <main className="app-main">
         {activeTab === 'overview' && (
           <OverviewPage
             patients={patients}
@@ -145,6 +152,7 @@ export default function App() {
             strategy={strategy}
             setActiveTab={setActiveTab}
             onViewOrchestration={handleOpenOrchestration}
+            events={events}
           />
         )}
 

@@ -28,13 +28,15 @@ def test_metrics_calculation_accuracy():
             "workflow_state": "COMPLETED",
             "requires_ambulance": True,
             "arrival_time": 0.0,
+            "ambulance_dispatch_time": 2.0,
             "hospital_arrival_time": 6.0,
+            "doctor_request_time": 6.0,
             "doctor_assignment_time": 10.0,
             "diagnostic_request_time": 10.0,
             "diagnostic_start_time": 12.0,
             "requires_icu": True,
             "icu_request_time": 15.0,
-            "icu_reservation_time": 15.0,
+            "icu_reservation_time": 17.0,
         }
     ]
     ambulances = [{"id": "AMB-01", "total_busy_time": 6.0}]
@@ -56,7 +58,9 @@ def test_metrics_calculation_accuracy():
     assert metrics.completed_workflows == 1
     assert metrics.workflow_completion_rate == 100.0
     assert metrics.average_ambulance_response_time == 6.0
+    assert metrics.average_ambulance_wait == 2.0
     assert metrics.average_time_to_doctor == 4.0
     assert metrics.average_time_to_diagnostics == 2.0
-    assert metrics.average_time_to_icu == 0.0
+    assert metrics.average_time_to_icu == 2.0
+    assert metrics.average_waiting_time == 2.5
     assert metrics.resource_conflicts == 1

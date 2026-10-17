@@ -49,42 +49,85 @@ class DoctorAgent(BaseAgent):
         """
         requested_spec = percepts.get("required_specialty")
         patient_id = percepts.get("patient_id")
-
-        eligible = [
-            doc for doc in percepts["doctors"]
-            if doc.get("status") == ResourceStatus.AVAILABLE.value
-            and doc.get("specialty") == requested_spec
-        ]
+        priority = percepts.get("priority", "P3")
+        workload_penalty_factor = {"P1": 0.5, "P2": 0.75, "P3": 1.0, "P4": 1.25}.get(priority, 1.0)
+        candidates = []
+        eligible = []
+        for doctor in percepts["doctors"]:
+            reasons = []
+            if doctor.get("status") != ResourceStatus.AVAILABLE.value:
+                reasons.append("not available")
+            if doctor.get("specialty") != requested_spec:
+                reasons.append(f"specialty mismatch: {doctor.get('specialty')}")
+            workload = doctor.get("workload_count", 0)
+            score = round(100.0 - workload * 10.0 * workload_penalty_factor, 2)
+            item = {
+                "resource_id": doctor["id"],
+                "name": doctor.get("name"),
+                "specialty": doctor.get("specialty"),
+                "available": doctor.get("status") == ResourceStatus.AVAILABLE.value,
+                "eligible": not reasons,
+                "rejection_reasons": reasons,
+                "workload_count": workload,
+                "workload_penalty_factor": workload_penalty_factor,
+                "score": score if not reasons else None,
+            }
+            candidates.append(item)
+            if not reasons:
+                eligible.append((score, doctor["id"], doctor, item))
 
         if not eligible:
             return {
                 "action": "CONFLICT_WAITING",
                 "patient_id": patient_id,
+                "candidates": candidates,
                 "reason": f"No available physician for requested specialty '{requested_spec}'. Request queued.",
             }
 
-        scored = []
-        for doc in eligible:
-            workload = doc.get("workload_count", 0)
-            score = 100.0 - (workload * 10.0)
-            scored.append((score, doc["id"], doc))
-
-        scored.sort(key=lambda x: (-x[0], x[1]))
-        selected_doc = scored[0][2]
+        eligible.sort(key=lambda item: (-item[0], item[1]))
+        ranked = []
+        for rank, (_, _, _, item) in enumerate(eligible, start=1):
+            ranked.append({**item, "rank": rank})
+        candidates_by_id = {item["resource_id"]: item for item in candidates}
+        candidates = [*ranked, *(item for item in candidates if not item["eligible"])]
+        selected_doc = eligible[0][2]
 
         return {
             "action": "ALLOCATE",
             "patient_id": patient_id,
             "doctor": selected_doc,
-            "score": scored[0][0],
-            "reason": f"Assigned {selected_doc['name']} ({selected_doc['specialty']}) based on specialty match and workload {selected_doc.get('workload_count', 0)}.",
+            "score": eligible[0][0],
+            "candidates": candidates,
+            "reason": (
+                f"Selected {selected_doc['name']} ({selected_doc['specialty']}) with "
+                f"score 100 - workload {selected_doc.get('workload_count', 0)} × 10 × "
+                f"priority factor {workload_penalty_factor} = {eligible[0][0]}; "
+                "ties use ascending doctor ID."
+            ),
         }
 
     def act(self, decision: Dict[str, Any], environment_state: Dict[str, Any]) -> Dict[str, Any]:
         """Assign doctor or emit conflict event."""
         sim_time = environment_state.get("simulation_time", 0.0)
-        patient_id = decision.get("patient_id")
+        patient_id = environment_state.get("patient", {}).get(
+            "id", decision.get("patient_id")
+        )
         action = decision.get("action")
+        if action == "ALLOCATE" and not self.reserve_resource(
+            decision["doctor"], patient_id
+        ):
+            refreshed = self.decide(self.perceive(environment_state))
+            if refreshed.get("action") == "ALLOCATE" and self.reserve_resource(
+                refreshed["doctor"], patient_id
+            ):
+                decision = refreshed
+            else:
+                decision = {
+                    **refreshed,
+                    "action": "CONFLICT_WAITING",
+                    "reason": "Selected doctor became unavailable; no other eligible doctor remained.",
+                }
+                action = decision["action"]
 
         if action == "ALLOCATE":
             doc = decision["doctor"]
@@ -151,14 +194,22 @@ class DoctorAgent(BaseAgent):
 
         return {"status": "ERROR"}
 
-    def release_doctor(self, doctor_id: str, doctors: List[Dict[str, Any]], simulation_time: float = 0.0):
+    def release_doctor(
+        self,
+        doctor_id: str,
+        doctors: List[Dict[str, Any]],
+        simulation_time: float = 0.0,
+        expected_patient_id: Optional[str] = None,
+    ):
         """Release physician upon patient examination / treatment completion."""
         sim_time = simulation_time
         for doc in doctors:
             if doc["id"] == doctor_id:
                 released_pid = doc.get("current_patient_id")
-                doc["status"] = ResourceStatus.AVAILABLE.value
-                doc["current_patient_id"] = None
+                if expected_patient_id and released_pid != expected_patient_id:
+                    return None
+                if not self.release_resource(doc, expected_patient_id or released_pid):
+                    return None
                 doc["availability_timestamp"] = sim_time
                 if released_pid and released_pid in self.active_patients:
                     self.active_patients.remove(released_pid)

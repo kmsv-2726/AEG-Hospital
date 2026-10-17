@@ -1,271 +1,89 @@
-import React, { useState } from 'react';
-import { Users, Search, Filter, Clock, Ambulance, Stethoscope, Activity, Bed, PlusCircle, Sparkles } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Search, UserPlus, Users } from 'lucide-react';
+import { EmptyState, PageHeader, SectionTitle } from '../components/OperationsUI';
 
 export default function PatientQueuePage({ patients = [], onOpenEmergencyModal, onViewOrchestration }) {
-  const [filterPriority, setFilterPriority] = useState('ALL');
-  const [filterWaiting, setFilterWaiting] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [priority, setPriority] = useState('ALL');
+  const [waitingOnly, setWaitingOnly] = useState(false);
+  const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState('arrival');
 
-  const filtered = patients.filter((p) => {
-    if (filterPriority !== 'ALL' && p.priority !== filterPriority) return false;
-    if (filterWaiting && !p.workflow_state.startsWith('WAITING_')) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      return (
-        p.name.toLowerCase().includes(q) ||
-        p.id.toLowerCase().includes(q) ||
-        p.condition_description.toLowerCase().includes(q) ||
-        p.required_specialty.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+  const filteredPatients = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return patients.filter((patient) => {
+      if (priority !== 'ALL' && patient.priority !== priority) return false;
+      if (waitingOnly && !patient.workflow_state?.startsWith('WAITING_')) return false;
+      if (!normalizedQuery) return true;
+      return [patient.id, patient.name, patient.emergency_type, patient.chief_complaint,
+        patient.condition_description, patient.required_specialty]
+        .some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+    }).sort((left, right) => {
+      if (sortBy === 'priority') return String(left.priority).localeCompare(String(right.priority)) || left.arrival_time - right.arrival_time;
+      if (sortBy === 'name') return left.name.localeCompare(right.name);
+      return left.arrival_time - right.arrival_time || left.id.localeCompare(right.id);
+    });
+  }, [patients, priority, waitingOnly, query, sortBy]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Header & Controls */}
-      <div className="glass-panel" style={{
-        padding: '18px 24px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '16px'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ background: 'rgba(6, 182, 212, 0.15)', padding: '8px', borderRadius: '10px' }}>
-            <Users size={22} color="var(--cyan-primary)" />
-          </div>
-          <div>
-            <h2 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>Patient Queue & Emergency Intake</h2>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Total: {patients.length} | Filtered: {filtered.length} patients
-            </p>
-          </div>
-        </div>
+    <div className="page-stack">
+      <PageHeader
+        eyebrow="PATIENT OPERATIONS"
+        title="Patient queue"
+        description={`${patients.length} registered synthetic cases · ${filteredPatients.length} shown`}
+        actions={<button className="btn btn-primary" onClick={onOpenEmergencyModal}><UserPlus size={16} />Add emergency</button>}
+      />
 
-        {/* Filters */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          {/* Search Box */}
-          <div style={{ position: 'relative', minWidth: '220px' }}>
-            <Search size={15} color="var(--text-dim)" style={{ position: 'absolute', left: '10px', top: '10px' }} />
-            <input
-              type="text"
-              placeholder="Search by ID, name, specialty..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '7px 10px 7px 32px',
-                background: 'rgba(0,0,0,0.3)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '8px',
-                color: '#fff',
-                fontSize: '0.8rem',
-                outline: 'none'
-              }}
-            />
-          </div>
-
-          {/* Priority filter pills */}
-          <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.25)', padding: '3px', borderRadius: '8px' }}>
-            {['ALL', 'P1', 'P2', 'P3', 'P4'].map((prio) => (
-              <button
-                key={prio}
-                onClick={() => setFilterPriority(prio)}
-                style={{
-                  padding: '5px 10px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  background: filterPriority === prio ? 'var(--cyan-primary)' : 'transparent',
-                  color: filterPriority === prio ? '#fff' : 'var(--text-muted)',
-                }}
-              >
-                {prio}
-              </button>
-            ))}
-          </div>
-
-          {/* Waiting toggle */}
-          <button
-            onClick={() => setFilterWaiting(!filterWaiting)}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '8px',
-              border: filterWaiting ? '1px solid var(--amber-warning)' : '1px solid var(--border-subtle)',
-              background: filterWaiting ? 'rgba(245, 158, 11, 0.2)' : 'rgba(0,0,0,0.25)',
-              color: filterWaiting ? '#fbbf24' : 'var(--text-muted)',
-              fontSize: '0.8rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <Clock size={14} />
-            <span>Waiting Only</span>
-          </button>
-
-          {/* New Emergency Button */}
-          <button
-            className="btn btn-primary"
-            onClick={onOpenEmergencyModal}
-            style={{ fontSize: '0.8rem', padding: '7px 14px' }}
-          >
-            <PlusCircle size={15} />
-            <span>New Emergency</span>
+      <section className="page-section">
+        <div className="queue-toolbar">
+          <label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search patient, ID, complaint, specialty" aria-label="Search patients" /></label>
+          <label className="inline-select">Priority
+            <select value={priority} onChange={(event) => setPriority(event.target.value)}>
+              {['ALL', 'P1', 'P2', 'P3', 'P4'].map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="inline-select">Sort by
+            <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+              <option value="arrival">Arrival time</option>
+              <option value="priority">Priority</option>
+              <option value="name">Patient name</option>
+            </select>
+          </label>
+          <button className={`filter-chip ${waitingOnly ? 'is-active' : ''}`} aria-pressed={waitingOnly} onClick={() => setWaitingOnly((value) => !value)}>
+            Waiting only
           </button>
         </div>
-      </div>
 
-      {/* Patient Table */}
-      <div className="glass-panel" style={{ padding: '20px', overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-dim)', fontSize: '0.75rem', textTransform: 'uppercase' }}>
-              <th style={{ padding: '12px 14px' }}>ID & PATIENT</th>
-              <th style={{ padding: '12px 14px' }}>PRIORITY</th>
-              <th style={{ padding: '12px 14px' }}>SEVERITY & DIAGNOSIS</th>
-              <th style={{ padding: '12px 14px' }}>WORKFLOW STATE</th>
-              <th style={{ padding: '12px 14px' }}>AMBULANCE</th>
-              <th style={{ padding: '12px 14px' }}>DOCTOR</th>
-              <th style={{ padding: '12px 14px' }}>DIAGNOSTICS</th>
-              <th style={{ padding: '12px 14px' }}>ICU BED</th>
-              <th style={{ padding: '12px 14px' }}>ARRIVAL</th>
-              <th style={{ padding: '12px 14px' }}>ORCHESTRATION</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={10} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-dim)' }}>
-                  No patients match the selected filter criteria.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((p) => {
-                const priorityClass = `badge-priority-${p.priority.toLowerCase()}`;
-                const isWaiting = p.workflow_state.startsWith('WAITING_');
+        <SectionTitle title="Registered cases" description="Assignments and states are read from the backend simulation service." />
+        {filteredPatients.length === 0 ? (
+          <EmptyState title={patients.length ? 'No matching patients' : 'No patients registered'} description={patients.length ? 'Change a filter or search term.' : 'Add a synthetic emergency to create the first workflow.'} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table patient-table">
+              <thead><tr><th>Patient</th><th>Priority</th><th>Emergency / complaint</th><th>Status</th><th>Ambulance</th><th>Doctor</th><th>Diagnostic</th><th>ICU</th><th>Arrival</th><th /></tr></thead>
+              <tbody>{filteredPatients.map((patient) => {
+                const waiting = patient.workflow_state?.startsWith('WAITING_');
+                const done = ['COMPLETED', 'DISCHARGED', 'TERMINATED'].includes(patient.workflow_state);
+                const resources = [patient.assigned_ambulance_id, patient.assigned_doctor_id, patient.assigned_diagnostic_id, patient.assigned_icu_bed_id].filter(Boolean);
                 return (
-                  <tr key={p.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.15s' }}>
-                    <td style={{ padding: '14px' }}>
-                      <div style={{ fontWeight: 700, color: '#fff' }}>{p.name}</div>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: '#38bdf8' }}>{p.id} • {p.age}y • {p.gender}</div>
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      <span className={priorityClass} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem' }}>
-                        {p.priority}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px', maxWidth: '240px' }}>
-                      <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: '0.8rem' }}>{p.severity_category}</div>
-                      <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {p.condition_description}
-                      </div>
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      <span className={`badge-state ${isWaiting ? 'badge-state-waiting' : p.workflow_state === 'COMPLETED' || p.workflow_state === 'DISCHARGED' ? 'badge-state-completed' : 'badge-state-active'}`}>
-                        {p.workflow_state}
-                      </span>
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      {p.assigned_ambulance_id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#38bdf8', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-                          <Ambulance size={14} />
-                          <span>{p.assigned_ambulance_id}</span>
-                        </div>
-                      ) : p.requires_ambulance ? (
-                        <span style={{ color: 'var(--amber-warning)', fontSize: '0.75rem' }}>
-                          {isWaiting && p.workflow_state.includes('AMBULANCE') ? 'Waiting Dispatch' : 'Pending'}
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Walk-in</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      {p.assigned_doctor_id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#818cf8', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-                          <Stethoscope size={14} />
-                          <span>{p.assigned_doctor_id}</span>
-                        </div>
-                      ) : (
-                        <div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Req: {p.required_specialty}</div>
-                          {isWaiting && p.workflow_state.includes('DOCTOR') && (
-                            <span style={{ color: 'var(--amber-warning)', fontSize: '0.7rem', fontWeight: 600 }}>In Queue</span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      {p.assigned_diagnostic_id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#34d399', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-                          <Activity size={14} />
-                          <span>{p.assigned_diagnostic_id}</span>
-                        </div>
-                      ) : p.required_diagnostic ? (
-                        <div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Req: {p.required_diagnostic}</div>
-                          {isWaiting && p.workflow_state.includes('DIAGNOSTIC') && (
-                            <span style={{ color: 'var(--amber-warning)', fontSize: '0.7rem', fontWeight: 600 }}>In Queue</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>None</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      {p.assigned_icu_bed_id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-                          <Bed size={14} />
-                          <span>{p.assigned_icu_bed_id}</span>
-                        </div>
-                      ) : p.requires_icu ? (
-                        <div>
-                          <span style={{ color: '#f87171', fontSize: '0.75rem', fontWeight: 600 }}>Required</span>
-                          {isWaiting && p.workflow_state.includes('ICU') && (
-                            <div style={{ color: 'var(--amber-warning)', fontSize: '0.7rem' }}>Waiting Bed</div>
-                          )}
-                        </div>
-                      ) : (
-                        <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>None</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      {p.arrival_time}m
-                    </td>
-                    <td style={{ padding: '14px' }}>
-                      <button
-                        onClick={() => onViewOrchestration && onViewOrchestration(p)}
-                        style={{
-                          background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(99, 102, 241, 0.2))',
-                          border: '1px solid rgba(6, 182, 212, 0.4)',
-                          borderRadius: '8px',
-                          padding: '5px 10px',
-                          color: '#38bdf8',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '5px'
-                        }}
-                      >
-                        <Sparkles size={13} />
-                        <span>Inspect</span>
-                      </button>
-                    </td>
+                  <tr key={patient.id}>
+                    <td><span className="patient-primary">{patient.name}</span><span className="patient-secondary">{patient.id} · {patient.age}y · {patient.gender}</span></td>
+                    <td><span className={`badge-priority-${String(patient.priority).toLowerCase()}`}>{patient.priority}</span>{patient.triage_requires_review && <small className="review-flag">Review</small>}</td>
+                    <td><span className="patient-primary">{patient.emergency_type || patient.severity_category}</span><span className="patient-secondary">{patient.chief_complaint || patient.condition_description || 'No complaint provided'}</span></td>
+                    <td><span className={`status-pill ${waiting ? 'is-waiting' : done ? 'is-complete' : 'is-active'}`}>{patient.workflow_state}</span></td>
+                    <td>{patient.assigned_ambulance_id || (patient.requires_ambulance ? 'Pending' : 'Walk-in')}</td>
+                    <td>{patient.assigned_doctor_id || patient.required_specialty}</td>
+                    <td>{patient.assigned_diagnostic_id || patient.required_diagnostic || 'Not required'}</td>
+                    <td>{patient.assigned_icu_bed_id || (patient.requires_icu ? 'Waiting / pending' : 'Not required')}</td>
+                    <td>{Number(patient.arrival_time || 0).toFixed(1)}m</td>
+                    <td><button className="text-button" onClick={() => onViewOrchestration(patient)}>Decision trace</button></td>
                   </tr>
                 );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+              })}</tbody>
+            </table>
+          </div>
+        )}
+        <div className="queue-footnote"><Users size={14} />{filteredPatients.reduce((count, patient) => count + (patient.assigned_doctor_id ? 1 : 0), 0)} doctor assignments · {filteredPatients.reduce((count, patient) => count + (patient.assigned_ambulance_id ? 1 : 0), 0)} ambulance assignments</div>
+      </section>
     </div>
   );
 }

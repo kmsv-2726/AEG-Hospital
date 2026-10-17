@@ -1,9 +1,9 @@
 # ACADEMIC PROJECT REPORT
-# Smart Hospital Emergency Response System Using Multi-Agent AI
+# Priority-Aware Multi-Agent Hospital Emergency Coordination and Resource Scheduling Simulator
 
 **Course:** B.Tech Computer Science and Engineering — Artificial Intelligence Capstone  
 **Project Domain:** Multi-Agent Systems (MAS) & Autonomous Decision-Making  
-**Implementation Approach:** Custom Local Rule-Based Multi-Agent Simulation (Zero External AI API Keys)  
+**Implementation Approach:** Custom Local-First Rule-Based Multi-Agent Simulation (No External AI Services)
 **Academic Year:** 2026  
 
 ---
@@ -25,10 +25,10 @@
 Modern hospital emergency departments (EDs) are dynamic, high-pressure environments that frequently face severe resource bottlenecks. Critical medical assets—such as emergency transport ambulances, trauma physicians, cardiologists, computed tomography (CT) scanners, and Intensive Care Unit (ICU) beds—are scarce and non-fungible. During surge events (e.g., highway multi-vehicle collisions or epidemic outbreaks), multiple emergency patients arrive simultaneously, creating complex scheduling conflicts, extended queues, and delayed emergency care.
 
 ### 1.2 Problem Statement
-Traditional centralized scheduling systems rely on static First-In, First-Out (FIFO) queues or monolithic scheduling heuristics. Such centralized architectures introduce single points of failure, scale poorly when resource categories expand, and fail to adaptively coordinate autonomous clinical assets in real time. Conversely, deploying a cooperative Multi-Agent AI System allows specialized software agents to independently manage individual resource types (e.g., fleet dispatch, clinical staffing, scanner scheduling) while negotiating through a central coordinator to maximize patient survival and resource efficiency.
+Emergency workflow coordination requires assigning ambulances, doctors, diagnostics, and ICU beds while requests compete for limited capacity. This project models the problem using five specialist agents and a Hospital Coordinator, and compares FIFO with deterministic priority-aware queue scheduling in a single simulated hospital.
 
 ### 1.3 Motivation
-This project is developed as an academic exploration of core Artificial Intelligence paradigms, including:
+This project is an academic simulation of emergency workflow coordination under limited resources. It explores:
 - Intelligent Agent architectures.
 - PEAS (Performance measure, Environment, Actuators, Sensors) formalizations.
 - Multi-Agent coordination and structured inter-agent communication.
@@ -43,11 +43,11 @@ The primary objectives of this system are:
 3. Establish a structured agent communication protocol with verified correlation IDs and typed message routing.
 4. Model hospital knowledge, patient workflows, and resource contention via a discrete-event simulation engine.
 5. Provide a responsive, high-tech React dashboard for real-time monitoring and experimentation.
-6. Empirically measure and validate the performance advantage of Priority-Aware MAS scheduling over conventional FIFO.
+6. Compare priority-aware scheduling with FIFO using repeatable paired synthetic workloads without assuming a winning policy.
 
 ### 1.5 Scope and Limitations
 - **Academic Simulation Scope:** The system simulates the operations of a single regional hospital emergency department utilizing synthetic patient cohorts and simulated resource units.
-- **Constraints & Safety Notice:** This software is strictly an academic AI simulation. It is not a clinical diagnostic tool, does not process real Protected Health Information (PHI), and does not replace medical personnel.
+- **Constraints & Safety Notice:** All patients and events are synthetic. The simulator does not provide diagnosis or treatment recommendations, does not process real patient records, and is not validated for clinical or emergency-service use.
 
 ---
 
@@ -56,7 +56,7 @@ The primary objectives of this system are:
 The system and its constituent agents are formalized using the standard Russell & Norvig PEAS framework.
 
 ### 2.1 System-Level PEAS
-- **Performance Measure ($P$):** Patient survival and condition stabilization rate, minimization of high-priority (P1/P2) waiting times, average ambulance response time, high clinical resource utilization, zero invalid double-bookings.
+- **Performance Measure ($P$):** Workflow completion rate, queue waiting times by stage, ambulance response time, resource utilization, unresolved requests, allocation conflicts, and valid single-owner reservations.
 - **Environment ($E$):** Synthetic emergency department consisting of incoming emergency calls, ambulatory walk-ins, 3 ambulances, 4 doctors across three specialties, 5 diagnostic scanners, and 3 ICU beds.
 - **Actuators ($A$):** Structured inter-agent dispatch messages, database reservation transactions, state machine transitions, event notifications.
 - **Sensors ($S$):** Incoming patient admission requests, simulation clock ticks, resource availability status flags, and agent response messages.
@@ -66,7 +66,7 @@ The system and its constituent agents are formalized using the standard Russell 
 | Agent | Performance Measure ($P$) | Environment ($E$) | Actuators ($A$) | Sensors ($S$) |
 |---|---|---|---|---|
 | **Hospital Coordinator** | Maximum workflow completion %, conflict resolution rate, queue throughput | Active hospital simulation state, waiting queues, all 5 specialized agents | Workflow stage transitions, retry triggers, message routing | Simulation clock ticks, agent completion messages, registration alerts |
-| **Triage Agent** | Stratification accuracy, immediate detection of life-threatening criteria | Intake queue, reported emergency conditions | `TRIAGE_COMPLETED` message, priority assignment (P1–P4) | Reported vital signs, condition description, trauma category |
+| **Triage Agent** | Consistent rule application and explainable P1–P4 assignment | Synthetic intake records and predefined severity categories | Priority assignment and structured triage event | Synthetic condition category and arrival time |
 | **Ambulance Agent** | Minimum dispatch ETA, capability-matching rate (ALS/Ventilator for P1) | Regional transit sectors, 3 ambulance units | Dispatch commands, reservation locks, vehicle release triggers | Fleet availability flags, base distance, patient coordinates |
 | **Doctor Agent** | Specialty matching accuracy, clinical workload balance across physicians | Emergency trauma, cardiology, and general medicine bays | Physician assignment locks, clinical release events | Physician status, active assignments, historical workload count |
 | **Diagnostic Agent** | Scanner queue minimization, zero idle scan duration | Imaging suite (CT, MRI, X-Ray, Lab, Ultrasound) | Scanner booking locks, scan completion events, queue reassignments | Scanner status, queue lengths, simulated procedure duration |
@@ -79,20 +79,20 @@ The system and its constituent agents are formalized using the standard Russell 
 ### 3.1 Agent Typology & Rationality
 - **Agent Architecture:** All agents inherit from the `BaseAgent` abstract class and implement the rational agent cycle:
   $$\text{Percepts} \longrightarrow \text{State Update} \longrightarrow \text{Decide (Rules/Utility)} \longrightarrow \text{Act (State & Messages)}$$
-- **Triage Agent:** Operates as a **Goal-Based & Rule-Based Agent**, utilizing deterministic clinical classification rules.
+- **Triage Agent:** Uses deterministic synthetic-category rules; these are not a medically validated triage protocol.
 - **Ambulance & Doctor Agents:** Operate as **Utility-Based Agents**, computing multi-criteria scalar scores balancing distance, capability, and workload before making commitments.
-- **Hospital Coordinator:** Operates as a **Cooperative Orchestrator**, facilitating message exchanges and resolving contention over shared exclusive resources.
+- **Hospital Coordinator:** Enforces the workflow FSM, coordinates synchronous specialist calls, logs structured messages, and retries waiting requests after resource release.
 
 ### 3.2 Environment Classification
 
 | Environmental Property | Classification | Implementation Justification |
 |---|---|---|
 | **Observability** | Fully Observable | The agents access shared, typed state via the Coordinator and database without hidden internal state. |
-| **Determinism** | Deterministic | Given an identical initial scenario and fixed random seed ($S=42$), outcomes and timelines are 100% reproducible. |
+| **Determinism** | Deterministic | A fixed synthetic workload and seed produce repeatable event outcomes; the evaluator uses five fixed seeds per cohort size. |
 | **Dynamics** | Dynamic | The environment state continuously changes as the discrete simulation clock advances and resources become busy/released. |
 | **Discreteness** | Discrete | Time advances through discrete event steps; states are finite and distinct. |
 | **Episodic vs Sequential** | Sequential | Decisions impact future states; dispatching an ambulance now affects availability for subsequent arrivals. |
-| **Multi-Agent Mode** | Cooperative | All agents share the global utility function: maximizing hospital patient throughput and survival. |
+| **Multi-Agent Mode** | Cooperative | Specialized agents allocate their own resource categories while the coordinator manages workflow progression and queue retries. |
 
 ---
 
@@ -131,40 +131,38 @@ graph TD
 
 ### 4.2 Resource Allocation Algorithms & Utility Functions
 
-#### Ambulance Utility Scoring
-For each available ambulance $a \in \mathcal{A}_{\text{eligible}}$:
+Ambulances are eligible only when available and when their capabilities contain all required equipment. If no equipment requirement is supplied, P1 requests require ALS by default. For each eligible ambulance $a$:
 $$U(a) = 100.0 - (\text{Distance}(a) \times 5.0) + \mathbf{1}_{\{P = \text{P1} \land \text{Ventilator} \in \text{Caps}(a)\}} \times 20.0$$
+The maximum score wins; ties use ascending ambulance ID. Distance determines simulated travel time ($1.5$ minutes per kilometer).
 
-#### Doctor Staffing Scoring
-For each available physician $d \in \mathcal{D}_{\text{eligible}}$ matching the required specialty:
+Doctors must be available and match the requested specialty. Their score is:
 $$U(d) = 100.0 - (\text{WorkloadCount}(d) \times 10.0)$$
-*Ties are broken deterministically using resource IDs.*
+Highest score wins; ties use ascending doctor ID. Diagnostics require an exact available category match and select the minimum tuple `(queue_length, simulated_duration, resource_id)`. ICU allocation selects an available bed, preferring ventilator-equipped beds for P1; ties use ascending bed ID.
+
+Waiting queues are ordered per resource request. FIFO sorts by request timestamp and patient ID. Priority-aware scheduling sorts by aging-adjusted numeric priority (P1=1 through P4=4, reduced by 0.05 per waiting minute to a floor of 1), then request timestamp and patient ID. Resource checks and reservations are performed under the owning agent's lock; release events must match the current patient owner.
 
 ### 4.3 Conflict Resolution Mechanism
-When multiple patients request a saturated resource (e.g., Patient P001 and Patient P003 both requesting the single Trauma doctor), the agent rejects the second allocation, transitions the patient to `WAITING_FOR_DOCTOR`, and enqueues the request in the Coordinator's waiting queue. When the occupying patient completes treatment, the resource is released, and the Coordinator re-evaluates the queue based on the active strategy (FIFO or Priority-Aware).
+When multiple patients request a saturated resource, the specialist records the rejected attempt, transitions the patient to its explicit waiting state, and queues the request. Resource release triggers reconsideration using the selected strategy. Ambulances are released at hospital arrival, doctors at exam completion, diagnostics at diagnostic completion, and ICU beds at treatment completion. Invalid FSM transitions are logged and rejected.
 
 ---
 
 ## SECTION 5 — IMPLEMENTATION
 
 ### 5.1 Technology Stack Summary
-- **Backend Core:** Python 3.12.0
-- **API Framework:** FastAPI 0.143.1 & Uvicorn 0.54.0
-- **Validation:** Pydantic 2.14.1 with `ConfigDict`
-- **Database:** SQLite 3 with SQLAlchemy 2.1.4
-- **Testing:** pytest 9.1.1, pytest-asyncio 1.4.0, httpx 0.28.1
-- **Frontend Dashboard:** React 18.3.1, Vite 5.4.14, Recharts 2.15.1, Lucide React 0.475.0
+- **Verified local environment:** Python 3.11.9, FastAPI 0.143.2, Pydantic 2.14.1, SQLAlchemy 2.1.4, pytest 9.1.1.
+- **Frontend environment:** Node.js 22.17.1, npm 10.9.2, React 18.3.1, Vite 5.4.21, Recharts 2.15.4, Lucide React 0.475.0.
+- **Persistence:** Local SQLite database via SQLAlchemy.
 
 ### 5.2 Module Layout & Responsibilities
 - `backend/app/agents/base_agent.py`: Abstract BaseAgent class with `perceive`, `decide`, `act`, and message handling.
 - `backend/app/agents/triage_agent.py`: Rule-based priority assignment (P1–P4).
-- `backend/app/agents/ambulance_agent.py`: Ambulance fleet distance scoring and dispatch.
+- `backend/app/agents/ambulance_agent.py`: Equipment eligibility, distance/capability scoring, atomic dispatch, and owner-checked release.
 - `backend/app/agents/doctor_agent.py`: Specialty constraint matching and workload leveling.
 - `backend/app/agents/diagnostic_agent.py`: Imaging equipment queues and reservations.
 - `backend/app/agents/icu_agent.py`: Critical bed reservations with ventilator capability checking.
 - `backend/app/coordinator/hospital_coordinator.py`: Central multi-agent coordinator and queue prioritizer.
 - `backend/app/simulation/engine.py`: Discrete-event simulation scheduler using min-heap event queue.
-- `backend/app/simulation/metrics.py`: Mathematical metric computations.
+- `backend/app/simulation/metrics.py`: Stage-specific waits, response time, utilization, unresolved-request, conflict, and completion calculations.
 - `backend/app/api/routes.py`: REST endpoints for dashboard controls and state queries.
 
 ### 5.3 Demonstration Emergency Scenario
@@ -180,37 +178,36 @@ The standard scenario defined in Section 23 consists of 5 heterogeneous patients
 ## SECTION 6 — TESTING AND RESULTS
 
 ### 6.1 Automated Testing Results
-A comprehensive test suite of 29 automated tests was developed and executed using `pytest`. All 29 tests passed cleanly with 100% success rate:
-- **Models & Enums:** 4 tests passed.
-- **Database Persistence & Reset:** 2 tests passed.
-- **Base Agent Lifecycle & Messaging:** 2 tests passed.
-- **Specialized Agents Logic:** 5 tests passed.
-- **Hospital Coordinator & Queuing:** 3 tests passed.
-- **Simulation Engine & Reproducibility:** 3 tests passed.
-- **Metrics Accuracy & Edge Cases:** 2 tests passed.
-- **FastAPI REST Endpoints:** 7 tests passed.
-- **Health Check Endpoint:** 1 test passed.
+The latest full backend suite at the time of this report completed with **44 passed**. Pytest used a temporary SQLite database so test resets did not operate on the local application database. Tests cover agent eligibility and reservations, owner-checked release, runtime FSM enforcement, repeatable simulation runs, queue ordering, event simulation, metrics, paired evaluation, database behavior, and API endpoints. A non-interactive CLI check also passes.
 
 ### 6.2 Empirical Performance Evaluation: FIFO vs Priority-Aware MAS
-To rigorously evaluate the system, identical synthetic workloads of 5 and 20 patients were executed under both scheduling strategies:
+Each workload size (5 and 20 patients) was generated for seeds 42–46. Within each seed, both policies used identical patient records, arrival times, resource capacities, and processing durations. Values below are means across five runs. The JSON artifact also contains per-seed results, population standard deviations, and workload fingerprints. Average waiting time combines completed ambulance-dispatch, doctor, diagnostic, and ICU waits; ambulance response is request-to-hospital-arrival time.
 
-| Metric | Workload 5 (FIFO) | Workload 5 (Priority MAS) | Workload 20 (FIFO) | Workload 20 (Priority MAS) |
-|---|---|---|---|---|
-| **Total Registered Patients** | 5 | 5 | 20 | 20 |
-| **Workflow Completion Rate** | 100.0% | 100.0% | 100.0% | 100.0% |
-| **Total Resource Conflicts Logged** | 4 | 4 | 44 | 60 |
-| **Overall Mean Waiting Time** | 2.54 mins | 2.54 mins | 27.83 mins | 27.96 mins |
-| **Critical (P1) Wait to Doctor** | 0.00 mins | 0.00 mins | **38.09 mins** | **27.37 mins (-28.1%)** |
-| **Low Severity (P4) Wait to Doctor** | 0.00 mins | 0.00 mins | 33.08 mins | 42.44 mins (+28.3%) |
-| **Doctor Workload Utilization** | 16.40% | 16.40% | 16.34% | 16.34% |
-| **Ambulance Utilization** | 12.55% | 12.55% | 11.33% | 11.33% |
-| **Diagnostic Utilization** | 7.87% | 7.87% | 9.22% | 9.22% |
-| **ICU Bed Utilization** | 13.12% | 13.12% | 11.44% | 11.44% |
+| Metric (simulated minutes unless noted) | 5 FIFO | 5 Priority | 20 FIFO | 20 Priority |
+|---|---:|---:|---:|---:|
+| Patients completed | 5 | 5 | 20 | 20 |
+| Workflow completion | 100% | 100% | 100% | 100% |
+| Average waiting time | 0.87 | 0.87 | 3.08 | 3.07 |
+| Ambulance queue wait | 0.00 | 0.00 | 0.05 | 0.05 |
+| Ambulance response time | 6.00 | 6.00 | 6.45 | 6.45 |
+| Time to doctor | 0.47 | 0.47 | 3.03 | 3.03 |
+| Diagnostic wait | 2.95 | 2.95 | 7.72 | 7.87 |
+| ICU wait | 0.00 | 0.00 | 0.39 | 0.09 |
+| P1 wait to doctor | 1.18 | 1.18 | 3.72 | 3.22 |
+| P2 wait to doctor | 0.00 | 0.00 | 7.51 | 8.51 |
+| P3 wait to doctor | 0.00 | 0.00 | 0.07 | 0.07 |
+| P4 wait to doctor | 0.00 | 0.00 | 0.15 | 0.15 |
+| Successful resource assignments (mean) | 14 | 14 | 59.2 | 59.2 |
+| Delayed patients at run end | 0 | 0 | 0 | 0 |
+| Allocation conflicts (mean) | 2.0 | 2.0 | 37.4 | 36.4 |
+| Unresolved requests | 0 | 0 | 0 | 0 |
+| Ambulance utilization | 12.37% | 12.37% | 25.92% | 26.09% |
+| Doctor utilization | 19.36% | 19.36% | 37.96% | 38.23% |
+| Diagnostic utilization | 11.41% | 11.41% | 26.21% | 26.39% |
+| ICU utilization | 15.49% | 15.49% | 30.37% | 30.58% |
 
 ### 6.3 Discussion of Findings
-1. **Critical Wait Time Reduction:** In the saturated 20-patient scenario, the Priority-Aware Multi-Agent System reduced the average wait time for critical life-threatening patients (P1) from **38.09 minutes down to 27.37 minutes**, representing a **28.1% improvement in critical response speed**.
-2. **Planned Trade-Off:** In accordance with queuing theory, prioritizing critical cases resulted in low-severity (P4) patients waiting longer (42.44 minutes vs 33.08 minutes). This confirms that the rule-based cooperative agents actively enforce clinical urgency without failing any patient workflows.
-3. **Conflict Resolution:** All 44 (FIFO) and 60 (Priority MAS) contention events were resolved dynamically through state transitions and waiting queue retries, with zero dropped requests.
+The five-patient cohort produced identical summary metrics for both policies. In the 20-patient cohort, priority-aware scheduling had a 0.01-minute lower mean overall wait and a 0.50-minute lower mean P1 doctor wait, while mean P2 doctor wait was higher by 1.00 minute; P3 and P4 means were equal. Both policies completed all workflows with no delayed patients or unresolved requests. These descriptive differences apply only to the synthetic workloads and are not evidence of clinical benefit or statistical significance.
 
 ---
 
@@ -246,7 +243,7 @@ To rigorously evaluate the system, identical synthetic workloads of 5 and 20 pat
 
 #### Figure 8: FIFO vs Priority-Aware Empirical Comparison
 ![FIFO Comparison](screenshots/08_fifo_comparison_charts.png)
-*Figure 8: Side-by-side empirical comparison chart demonstrating a 28.1% reduction in critical patient wait times under the Priority-Aware MAS strategy.*
+*Figure 8: Dashboard comparison view for FIFO and priority-aware scheduling. Current measured values are recorded in the results table and baseline JSON artifact.*
 
 ---
 
@@ -254,5 +251,4 @@ To rigorously evaluate the system, identical synthetic workloads of 5 and 20 pat
 1. Russell, S., & Norvig, P. (2020). *Artificial Intelligence: A Modern Approach* (4th ed.). Pearson.
 2. Wooldridge, M. (2009). *An Introduction to MultiAgent Systems* (2nd ed.). John Wiley & Sons.
 3. Ferber, J. (1999). *Multi-Agent Systems: An Introduction to Distributed Artificial Intelligence*. Addison-Wesley.
-4. Tiwary, A., & Mahapatra, R. (2021). Multi-agent systems in healthcare emergency logistics: A systematic review. *Journal of Healthcare Informatics Research*, 5(3), 245–271.
-5. FastAPI Documentation. (2024). *Modern, fast (high-performance), web framework for building APIs with Python*. https://fastapi.tiangolo.com/
+4. FastAPI Documentation. *FastAPI framework documentation*. https://fastapi.tiangolo.com/

@@ -22,7 +22,6 @@ class PatientWorkflowFSM:
             WorkflowState.WAITING_FOR_AMBULANCE,
             WorkflowState.AMBULANCE_ASSIGNED,
             WorkflowState.ARRIVED,
-            WorkflowState.ADMITTED,
         },
         WorkflowState.WAITING_FOR_AMBULANCE: {
             WorkflowState.AMBULANCE_ASSIGNED,
@@ -58,7 +57,6 @@ class PatientWorkflowFSM:
         },
         WorkflowState.WAITING_FOR_ICU: {
             WorkflowState.ICU_ALLOCATED,
-            WorkflowState.TREATMENT_SIMULATED,
             WorkflowState.TERMINATED,
         },
         WorkflowState.ICU_ALLOCATED: {WorkflowState.TREATMENT_SIMULATED},

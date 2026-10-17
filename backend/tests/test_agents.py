@@ -37,12 +37,12 @@ def test_ambulance_agent_allocation_and_conflict():
     agent = AmbulanceAgent()
 
     fleet = [
-        {"id": "AMB-01", "call_sign": "Alpha", "status": ResourceStatus.AVAILABLE.value, "base_distance_km": 3.0, "equipment_capabilities": "BLS,ALS,Ventilator"},
-        {"id": "AMB-02", "call_sign": "Bravo", "status": ResourceStatus.AVAILABLE.value, "base_distance_km": 6.0, "equipment_capabilities": "BLS"},
+        {"id": "AMB-01", "call_sign": "Alpha", "status": ResourceStatus.AVAILABLE.value, "base_distance_km": 8.0, "equipment_capabilities": "BLS,ALS,Ventilator"},
+        {"id": "AMB-02", "call_sign": "Bravo", "status": ResourceStatus.AVAILABLE.value, "base_distance_km": 2.0, "equipment_capabilities": "BLS"},
     ]
 
     # Test allocation
-    env = {"patient": {"id": "P001", "priority": "P1", "requires_ambulance": True}, "ambulances": fleet, "simulation_time": 5.0}
+    env = {"patient": {"id": "P001", "priority": "P1", "requires_ambulance": True, "required_equipment": ["ALS"]}, "ambulances": fleet, "simulation_time": 5.0}
     decision = agent.decide(agent.perceive(env))
     assert decision["action"] == "ALLOCATE"
     assert decision["ambulance"]["id"] == "AMB-01"
@@ -50,6 +50,16 @@ def test_ambulance_agent_allocation_and_conflict():
     act_result = agent.act(decision, env)
     assert act_result["status"] == "ALLOCATED"
     assert fleet[0]["status"] == ResourceStatus.BUSY.value
+    stale_result = agent.act(
+        decision,
+        {
+            "patient": {"id": "P099", "priority": "P1", "requires_ambulance": True},
+            "ambulances": fleet,
+            "simulation_time": 5.0,
+        },
+    )
+    assert stale_result["status"] == "WAITING"
+    assert fleet[0]["current_patient_id"] == "P001"
 
     # Mark second busy to test conflict
     fleet[1]["status"] = ResourceStatus.BUSY.value
@@ -61,9 +71,94 @@ def test_ambulance_agent_allocation_and_conflict():
     assert act_conflict["status"] == "WAITING"
 
     # Test release
+    assert agent.release_ambulance(
+        "AMB-01", fleet, simulation_time=15.0, expected_patient_id="P099"
+    ) is None
+    assert fleet[0]["current_patient_id"] == "P001"
     released = agent.release_ambulance("AMB-01", fleet, simulation_time=15.0)
     assert released is not None
     assert fleet[0]["status"] == ResourceStatus.AVAILABLE.value
+
+
+def test_ambulance_selection_uses_urgency_bonus_and_explains_candidates():
+    agent = AmbulanceAgent()
+    fleet = [
+        {
+            "id": "AMB-NEAR",
+            "status": ResourceStatus.AVAILABLE.value,
+            "base_distance_km": 1.0,
+            "equipment_capabilities": "BLS,ALS",
+        },
+        {
+            "id": "AMB-VENT",
+            "status": ResourceStatus.AVAILABLE.value,
+            "base_distance_km": 3.0,
+            "equipment_capabilities": "BLS,ALS,Ventilator",
+        },
+        {
+            "id": "AMB-BUSY",
+            "status": ResourceStatus.BUSY.value,
+            "base_distance_km": 0.5,
+            "equipment_capabilities": "BLS,ALS,Ventilator",
+        },
+    ]
+    patient = {
+        "id": "P-URGENT",
+        "priority": "P1",
+        "requires_ambulance": True,
+        "required_equipment": ["ALS"],
+    }
+    decision = agent.decide(agent.perceive({"patient": patient, "ambulances": fleet}))
+
+    assert decision["ambulance"]["id"] == "AMB-VENT"
+    candidates = {candidate["resource_id"]: candidate for candidate in decision["candidates"]}
+    assert candidates["AMB-VENT"]["score"] == 105.0
+    assert candidates["AMB-VENT"]["rank"] == 1
+    assert candidates["AMB-NEAR"]["score"] == 95.0
+    assert candidates["AMB-BUSY"]["eligible"] is False
+    assert candidates["AMB-BUSY"]["rejection_reasons"] == ["not available"]
+
+    patient["priority"] = "P3"
+    ordinary_decision = agent.decide(
+        agent.perceive({"patient": patient, "ambulances": fleet})
+    )
+    assert ordinary_decision["ambulance"]["id"] == "AMB-NEAR"
+
+
+def test_ambulance_stale_candidate_falls_back_and_ties_use_resource_id():
+    agent = AmbulanceAgent()
+    fleet = [
+        {"id": "AMB-B", "status": "AVAILABLE", "base_distance_km": 2.0, "equipment_capabilities": "ALS,BLS"},
+        {"id": "AMB-A", "status": "AVAILABLE", "base_distance_km": 2.0, "equipment_capabilities": "ALS,BLS"},
+        {"id": "AMB-INCOMPATIBLE", "status": "AVAILABLE", "base_distance_km": 0.1, "equipment_capabilities": "BLS"},
+    ]
+    patient = {"id": "P-FIRST", "priority": "P2", "requires_ambulance": True, "required_equipment": ["ALS"]}
+    decision = agent.decide(agent.perceive({"patient": patient, "ambulances": fleet}))
+    assert decision["ambulance"]["id"] == "AMB-A"
+
+    decision["ambulance"]["status"] = "BUSY"
+    decision["ambulance"]["current_patient_id"] = "P-OTHER"
+    fallback = agent.act(
+        decision,
+        {
+            "patient": {**patient, "id": "P-SECOND"},
+            "ambulances": fleet,
+            "simulation_time": 1.0,
+        },
+    )
+    assert fallback["status"] == "ALLOCATED"
+    assert fallback["ambulance_id"] == "AMB-B"
+    assert fleet[0]["current_patient_id"] == "P-SECOND"
+    assert fleet[1]["current_patient_id"] == "P-OTHER"
+
+    equipment_specific = agent.decide(agent.perceive({
+        "patient": {"id": "P-THIRD", "priority": "P3", "requires_ambulance": True, "required_equipment": ["BLS"]},
+        "ambulances": [
+            {"id": "AMB-10", "status": "AVAILABLE", "base_distance_km": 4.0, "equipment_capabilities": "BLS"},
+            {"id": "AMB-11", "status": "AVAILABLE", "base_distance_km": 1.0, "equipment_capabilities": "ALS,BLS"},
+        ],
+    }))
+    assert equipment_specific["ambulance"]["id"] == "AMB-11"
 
 
 def test_doctor_agent_specialty_and_workload():
@@ -85,8 +180,24 @@ def test_doctor_agent_specialty_and_workload():
     assert act_res["doctor_id"] == "DOC-02"
     assert doctors[1]["workload_count"] == 1
     assert doctors[1]["status"] == ResourceStatus.BUSY.value
+    stale_result = agent.act(
+        decision,
+        {
+            "patient": {"id": "P099", "required_specialty": "Trauma"},
+            "doctors": doctors,
+            "simulation_time": 2.0,
+        },
+    )
+    assert stale_result["status"] == "ALLOCATED"
+    assert stale_result["doctor_id"] == "DOC-01"
+    assert doctors[1]["current_patient_id"] == "P001"
+    assert doctors[0]["current_patient_id"] == "P099"
 
     # Test release doctor
+    assert agent.release_doctor(
+        "DOC-02", doctors, simulation_time=10.0, expected_patient_id="P099"
+    ) is None
+    assert doctors[1]["current_patient_id"] == "P001"
     agent.release_doctor("DOC-02", doctors, simulation_time=10.0)
     assert doctors[1]["status"] == ResourceStatus.AVAILABLE.value
 
@@ -106,8 +217,22 @@ def test_diagnostic_agent():
     act_res = agent.act(decision, env)
     assert act_res["status"] == "ALLOCATED"
     assert resources[0]["status"] == ResourceStatus.BUSY.value
+    stale_result = agent.act(
+        decision,
+        {
+            "patient": {"id": "P099", "required_diagnostic": "CT"},
+            "diagnostic_resources": resources,
+            "simulation_time": 0.0,
+        },
+    )
+    assert stale_result["status"] == "WAITING"
+    assert resources[0]["current_patient_id"] == "P001"
 
     # Release
+    assert agent.release_diagnostic(
+        "DIAG-CT-01", resources, simulation_time=15.0, expected_patient_id="P099"
+    ) is None
+    assert resources[0]["current_patient_id"] == "P001"
     agent.release_diagnostic("DIAG-CT-01", resources, simulation_time=15.0)
     assert resources[0]["status"] == ResourceStatus.AVAILABLE.value
 
@@ -128,7 +253,23 @@ def test_icu_agent():
     act_res = agent.act(decision, env)
     assert act_res["status"] == "ALLOCATED"
     assert beds[1]["status"] == ResourceStatus.BUSY.value
+    stale_result = agent.act(
+        decision,
+        {
+            "patient": {"id": "P099", "requires_icu": True, "priority": "P1"},
+            "icu_beds": beds,
+            "simulation_time": 0.0,
+        },
+    )
+    assert stale_result["status"] == "ALLOCATED"
+    assert stale_result["icu_bed_id"] == "ICU-01"
+    assert beds[1]["current_patient_id"] == "P001"
+    assert beds[0]["current_patient_id"] == "P099"
 
     # Release
+    assert agent.release_bed(
+        "ICU-02", beds, simulation_time=30.0, expected_patient_id="P099"
+    ) is None
+    assert beds[1]["current_patient_id"] == "P001"
     agent.release_bed("ICU-02", beds, simulation_time=30.0)
     assert beds[1]["status"] == ResourceStatus.AVAILABLE.value

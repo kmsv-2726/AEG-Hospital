@@ -42,7 +42,15 @@ class TriageAgent(BaseAgent):
         return {
             "patient_id": pid,
             "severity_category": patient_data.get("severity_category", ""),
+            "emergency_type": patient_data.get("emergency_type") or "",
             "condition_description": patient_data.get("condition_description", ""),
+            "chief_complaint": patient_data.get("chief_complaint", ""),
+            "symptoms": patient_data.get("symptoms", ""),
+            "heart_rate": patient_data.get("heart_rate"),
+            "oxygen_saturation": patient_data.get("oxygen_saturation"),
+            "blood_pressure": patient_data.get("blood_pressure"),
+            "triage_mode": patient_data.get("triage_mode", "AUTO"),
+            "provided_priority": patient_data.get("priority", "P3"),
             "arrival_time": patient_data.get("arrival_time", 0.0),
         }
 
@@ -55,7 +63,22 @@ class TriageAgent(BaseAgent):
         - Low severity / dehydration / minor -> P4 (Low)
         """
         severity = percepts.get("severity_category", "").lower()
-        description = percepts.get("condition_description", "").lower()
+        description = " ".join((
+            percepts.get("emergency_type") or "",
+            percepts.get("condition_description") or "",
+            percepts.get("chief_complaint") or "",
+            percepts.get("symptoms") or "",
+        )).lower()
+
+        if percepts.get("triage_mode") == "PROVIDED":
+            priority = PriorityLevel(percepts.get("provided_priority", "P3"))
+            return {
+                "patient_id": percepts.get("patient_id"),
+                "priority": priority,
+                "reason": "Priority was explicitly provided by the operator; deterministic symptom rules were not used.",
+                "requires_review": False,
+                "mode": "PROVIDED",
+            }
 
         if any(term in severity or term in description for term in ["critical", "cardiac", "arrest", "bleeding", "shock"]):
             priority = PriorityLevel.P1
@@ -66,14 +89,19 @@ class TriageAgent(BaseAgent):
         elif any(term in severity or term in description for term in ["moderate", "injury", "wrist", "laceration"]):
             priority = PriorityLevel.P3
             reason = "Deterministic clinical rule matched moderate non-life-threatening category (P3)."
-        else:
+        elif any(term in severity or term in description for term in ["low", "minor", "mild", "dehydration", "fever"]):
             priority = PriorityLevel.P4
-            reason = "Deterministic clinical rule assigned low-severity ambulatory priority (P4)."
+            reason = "Deterministic synthetic rule matched the configured low-severity category (P4)."
+        else:
+            priority = PriorityLevel.P3
+            reason = "No configured category rule matched. Provisional P3 is assigned for simulation ordering; human assessment is required."
 
         return {
             "patient_id": percepts.get("patient_id"),
             "priority": priority,
             "reason": reason,
+            "requires_review": "No configured category rule matched" in reason,
+            "mode": "AUTO",
         }
 
     def act(self, decision: Dict[str, Any], environment_state: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,7 +125,12 @@ class TriageAgent(BaseAgent):
             message_type=MessageType.TRIAGE_COMPLETED,
             patient_id=patient_id,
             simulation_time=sim_time,
-            payload={"priority": priority.value, "reason": reason},
+            payload={
+                "priority": priority.value,
+                "reason": reason,
+                "requires_review": decision.get("requires_review", False),
+                "triage_mode": decision.get("mode", "AUTO"),
+            },
         )
 
         self.status = "IDLE"
@@ -109,5 +142,7 @@ class TriageAgent(BaseAgent):
             "patient_id": patient_id,
             "priority": priority.value,
             "reason": reason,
+            "requires_review": decision.get("requires_review", False),
+            "mode": decision.get("mode", "AUTO"),
             "message": msg,
         }

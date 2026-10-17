@@ -31,6 +31,8 @@ from backend.app.models.entities import (
     SimulationEventModel,
     AgentMessageModel,
 )
+from backend.app.models.enums import MessageType
+from backend.app.schemas.hospital_schemas import AgentMessageSchema
 
 
 class SimulationService:
@@ -80,6 +82,14 @@ class SimulationService:
             {c.name: getattr(p, c.name) for c in p.__table__.columns}
             for p in db.query(PatientModel).all()
         ]
+        for patient in patients:
+            patient["required_equipment"] = [
+                value for value in (patient.get("required_equipment") or "").split(",") if value
+            ]
+            patient["required_icu_equipment"] = [
+                value for value in (patient.get("required_icu_equipment") or "").split(",") if value
+            ]
+            patient["decision_trace"] = json.loads(patient.pop("decision_trace_json", "[]") or "[]")
         resources = {
             "ambulances": [
                 {c.name: getattr(a, c.name) for c in a.__table__.columns}
@@ -100,12 +110,91 @@ class SimulationService:
         }
         self.engine = SimulationEngine(strategy=self.strategy, seed=42)
         self.engine.load_scenario(patients, resources)
+        self.engine.all_events = [
+            SimulationEventSchema.model_validate(event)
+            for event in db.query(SimulationEventModel).order_by(
+                SimulationEventModel.id
+            ).all()
+        ]
+        persisted_messages = db.query(AgentMessageModel).order_by(AgentMessageModel.id).all()
+        self.engine.coordinator.message_bus.message_history = [
+            AgentMessageSchema(
+                message_id=message.message_id,
+                sender=message.sender,
+                receiver=message.receiver,
+                message_type=MessageType(message.message_type),
+                patient_id=message.patient_id,
+                resource_id=message.resource_id,
+                simulation_time=message.simulation_time,
+                correlation_id=message.correlation_id,
+                payload=json.loads(message.payload_json or "{}"),
+                status=message.status,
+            )
+            for message in persisted_messages
+        ]
+        self.engine.all_messages = list(self.engine.coordinator.message_bus.message_history)
+        self._persisted_event_count = len(self.engine.all_events)
+        self._persisted_message_count = len(self.engine.all_messages)
+
+    def _reset_run_state(self, db):
+        """Reset persisted runtime fields so a completed cohort can be replayed."""
+        patient_runtime_fields = (
+            "hospital_arrival_time",
+            "ambulance_dispatch_time",
+            "doctor_request_time",
+            "doctor_assignment_time",
+            "diagnostic_request_time",
+            "diagnostic_start_time",
+            "diagnostic_end_time",
+            "icu_request_time",
+            "icu_reservation_time",
+            "treatment_start_time",
+            "completion_time",
+        )
+        assignment_fields = (
+            "assigned_ambulance_id",
+            "assigned_doctor_id",
+            "assigned_diagnostic_id",
+            "assigned_icu_bed_id",
+        )
+
+        for patient in db.query(PatientModel).all():
+            patient.workflow_state = WorkflowState.REGISTERED.value
+            patient.waiting_duration = 0.0
+            patient.decision_trace_json = "[]"
+            patient.triage_reason = None
+            patient.triage_requires_review = False
+            for field in patient_runtime_fields:
+                setattr(patient, field, None)
+            for field in assignment_fields:
+                setattr(patient, field, None)
+
+        for model in (AmbulanceModel, DoctorModel, DiagnosticResourceModel, ICUBedModel):
+            for resource in db.query(model).all():
+                resource.status = ResourceStatus.AVAILABLE.value
+                resource.current_patient_id = None
+                resource.total_busy_time = 0.0
+                resource.availability_timestamp = 0.0
+                if isinstance(resource, DoctorModel):
+                    resource.workload_count = 0
+                elif isinstance(resource, AmbulanceModel):
+                    resource.total_dispatches = 0
+                elif isinstance(resource, DiagnosticResourceModel):
+                    resource.queue_length = 0
+                elif isinstance(resource, ICUBedModel):
+                    resource.reservation_timestamp = None
+                    resource.release_timestamp = None
+
+        db.query(SimulationEventModel).delete(synchronize_session=False)
+        db.query(AgentMessageModel).delete(synchronize_session=False)
+        db.commit()
 
     def start_simulation(self, strategy: AllocationStrategy = AllocationStrategy.PRIORITY_AWARE) -> MetricsSummary:
-        """Run the simulation to completion and synchronize state back to database."""
+        """Replay the persisted synthetic cohort from a clean runtime state."""
         self.strategy = strategy
         db = SessionLocal()
         try:
+            self._reset_run_state(db)
             self._load_from_db(db)
             metrics = self.engine.run_until_complete()
             self._sync_to_db(db)
@@ -129,6 +218,11 @@ class SimulationService:
         for p_data in self.engine.patients.values():
             db_p = db.query(PatientModel).filter(PatientModel.id == p_data["id"]).first()
             filtered_p = {k: v for k, v in p_data.items() if hasattr(PatientModel, k) and k != "_sa_instance_state"}
+            if "required_equipment" in filtered_p:
+                filtered_p["required_equipment"] = ",".join(filtered_p["required_equipment"] or [])
+            if "required_icu_equipment" in filtered_p:
+                filtered_p["required_icu_equipment"] = ",".join(filtered_p["required_icu_equipment"] or [])
+            filtered_p["decision_trace_json"] = json.dumps(p_data.get("decision_trace", []))
             if db_p:
                 for k, v in filtered_p.items():
                     setattr(db_p, k, v)
@@ -163,7 +257,7 @@ class SimulationService:
                     if hasattr(db_bed, k):
                         setattr(db_bed, k, v)
 
-        for evt in self.engine.all_events:
+        for evt in self.engine.all_events[getattr(self, "_persisted_event_count", 0):]:
             db_evt = SimulationEventModel(
                 simulation_time=evt.simulation_time,
                 event_type=evt.event_type,
@@ -176,7 +270,24 @@ class SimulationService:
             )
             db.add(db_evt)
 
+        messages = self.engine.coordinator.message_bus.message_history
+        for message in messages[getattr(self, "_persisted_message_count", 0):]:
+            db.add(AgentMessageModel(
+                message_id=message.message_id,
+                sender=message.sender,
+                receiver=message.receiver,
+                message_type=message.message_type.value,
+                patient_id=message.patient_id,
+                resource_id=message.resource_id,
+                simulation_time=message.simulation_time,
+                correlation_id=message.correlation_id,
+                payload_json=json.dumps(message.payload),
+                status=message.status,
+            ))
+
         db.commit()
+        self._persisted_event_count = len(self.engine.all_events)
+        self._persisted_message_count = len(messages)
 
     def get_patients(self) -> List[Dict[str, Any]]:
         """Return all active patient records from engine state."""
@@ -190,7 +301,10 @@ class SimulationService:
         """
         p_dict = patient_data.model_dump()
         pid = p_dict["id"]
+        if pid in self.engine.patients:
+            raise ValueError(f"Patient ID '{pid}' is already registered.")
         p_dict["workflow_state"] = "REGISTERED"
+        p_dict["decision_trace"] = []
         self.engine.patients[pid] = p_dict
 
         initial_event_count = len(self.engine.all_events)
@@ -353,81 +467,17 @@ class SimulationService:
         messages = self.engine.coordinator.message_bus.get_messages_for_patient(patient_id)
         events = [e for e in self.engine.all_events if e.patient_id == patient_id]
 
-        # Formulate structured chronological steps
         steps = [
             OrchestrationStep(
-                agent="HospitalCoordinator",
-                action="PATIENT_REGISTERED",
-                timestamp=patient.get("arrival_time", 0.0),
-                description=f"Registered {patient.get('name')} ({patient_id}). Initialized Process Control Block (PCB).",
-                status="COMPLETED",
-                details={"priority": patient.get("priority")},
-            ),
-            OrchestrationStep(
-                agent="TriageAgent",
-                action="TRIAGE_COMPLETED",
-                timestamp=patient.get("arrival_time", 0.0),
-                description=f"Rule-based urgency evaluation matched '{patient.get('severity_category')}'. Assigned {patient.get('priority')}.",
-                status="COMPLETED",
-                details={"priority": patient.get("priority")},
-            ),
-            OrchestrationStep(
-                agent="AmbulanceAgent",
-                action="AMBULANCE_DISPATCH",
-                timestamp=patient.get("ambulance_dispatch_time") or patient.get("arrival_time", 0.0),
-                description=(
-                    f"Dispatched unit {patient.get('assigned_ambulance_id')} with ETA."
-                    if patient.get("assigned_ambulance_id")
-                    else "Walk-in emergency or fleet busy (queued)."
-                ),
-                status="COMPLETED" if patient.get("assigned_ambulance_id") or not patient.get("requires_ambulance") else "WAITING",
-                details={"ambulance_id": patient.get("assigned_ambulance_id")},
-            ),
-            OrchestrationStep(
-                agent="DoctorAgent",
-                action="DOCTOR_ASSIGNMENT",
-                timestamp=patient.get("doctor_assignment_time") or 0.0,
-                description=(
-                    f"Assigned specialist {patient.get('assigned_doctor_id')} matching '{patient.get('required_specialty')}'."
-                    if patient.get("assigned_doctor_id")
-                    else f"Specialty '{patient.get('required_specialty')}' busy. Entered Doctor Ready Queue."
-                ),
-                status="COMPLETED" if patient.get("assigned_doctor_id") else "WAITING",
-                details={"doctor_id": patient.get("assigned_doctor_id")},
-            ),
+                agent=trace.get("agent", "HospitalCoordinator"),
+                action=trace.get("action", "DECISION"),
+                timestamp=trace.get("simulation_time", 0.0),
+                description=trace.get("description", ""),
+                status=trace.get("status", "UNKNOWN"),
+                details=trace.get("details", {}),
+            )
+            for trace in patient.get("decision_trace", [])
         ]
-
-        if patient.get("required_diagnostic"):
-            steps.append(
-                OrchestrationStep(
-                    agent="DiagnosticAgent",
-                    action="DIAGNOSTIC_SCHEDULED",
-                    timestamp=patient.get("diagnostic_start_time") or 0.0,
-                    description=(
-                        f"Acquired scanner mutex for {patient.get('required_diagnostic')} ({patient.get('assigned_diagnostic_id')})."
-                        if patient.get("assigned_diagnostic_id")
-                        else f"Scanner {patient.get('required_diagnostic')} busy. Queued."
-                    ),
-                    status="COMPLETED" if patient.get("assigned_diagnostic_id") else "WAITING",
-                    details={"diagnostic_id": patient.get("assigned_diagnostic_id")},
-                )
-            )
-
-        if patient.get("requires_icu"):
-            steps.append(
-                OrchestrationStep(
-                    agent="ICUAgent",
-                    action="ICU_BED_RESERVATION",
-                    timestamp=patient.get("icu_reservation_time") or 0.0,
-                    description=(
-                        f"Acquired ICU Counting Semaphore permit. Reserved bed {patient.get('assigned_icu_bed_id')}."
-                        if patient.get("assigned_icu_bed_id")
-                        else "All ICU beds occupied. Blocked on semaphore."
-                    ),
-                    status="COMPLETED" if patient.get("assigned_icu_bed_id") else "WAITING",
-                    details={"icu_bed_id": patient.get("assigned_icu_bed_id")},
-                )
-            )
 
         return {
             "patient": patient,

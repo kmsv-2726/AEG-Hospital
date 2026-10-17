@@ -1,15 +1,23 @@
 # Automated Test Execution Report
-## Smart Hospital Emergency Response System Using Multi-Agent AI
+## Priority-Aware Multi-Agent Hospital Emergency Coordination and Resource Scheduling Simulator
 
 **Date of Execution:** 2026-10-15 / 2026-10-16  
 **Test Framework:** `pytest 9.1.1` (with `pytest-asyncio 1.4.0`)  
-**Python Environment:** Python 3.12.0 (Windows 11 x64)  
-**Total Tests:** 29  
-**Passed:** 29 (100%)  
-**Failed:** 0  
-**Execution Duration:** 1.73 seconds  
+**Python Environment:** Python 3.11.9 (Windows)
+**Current Verified Run:** 2026-10-16, `python -m pytest -q backend/tests`
+**Total Tests:** 39
+**Passed:** 39 (100%)
+**Failed:** 0
+**Execution Duration:** 2.31 seconds
+**Database Isolation:** Pytest used a temporary SQLite database; the local application database was not subjected to test resets.
 
----
+### Current Coverage
+- Eleven test modules cover domain models, database behavior, agent decisions and reservations, coordinator queues, runtime FSM paths, event simulation, metrics, paired evaluation, API behavior, and OS/orchestration endpoints.
+- Focused checks verified that stale allocation decisions cannot double-book resources, stale release events cannot release another patient's reservation, and message IDs/correlation IDs match between the bus and agent outbox.
+- Paired evaluation tests verify deterministic synthetic generation, balanced severity categories, identical workload fingerprints per seed across both policies, and persisted result summaries.
+
+### Historical Test Matrix
+The matrix below records an earlier 29-test run and is retained as historical detail. It is superseded by the current 37-test execution summary above; it does not enumerate the added tests.
 
 ### Detailed Test Execution Matrix
 

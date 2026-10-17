@@ -17,8 +17,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Smart Hospital Emergency Response System API",
-    description="Multi-Agent AI Simulation for Emergency Hospital Coordination",
+    title="Priority-Aware Multi-Agent Hospital Coordination Simulator API",
+    description="Local simulation of synthetic hospital emergency workflows and resource scheduling",
     version="1.0.0",
     lifespan=lifespan,
 )

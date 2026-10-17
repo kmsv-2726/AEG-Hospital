@@ -1,5 +1,5 @@
 # System Architecture Specification
-## Smart Hospital Emergency Response System Using Multi-Agent AI
+## Priority-Aware Multi-Agent Hospital Emergency Coordination and Resource Scheduling Simulator
 
 ### 1. High-Level System Architecture
 
@@ -34,9 +34,9 @@ graph TD
 
 ### 2. Multi-Agent Communication Protocol
 
-Agents communicate via typed structured messages complying with the protocol defined in Section 17:
+The coordinator calls specialist agents synchronously and records typed structured messages for each handoff:
 - **Message Fields:** `message_id`, `sender`, `receiver`, `message_type`, `patient_id`, `resource_id`, `simulation_time`, `correlation_id`, `payload`, `status`.
-- **Communication Pattern:** Event-driven message dispatching mediated by the Hospital Coordinator.
+- **Communication Pattern:** Coordinator-mediated direct calls with message-bus logging; the bus is not an asynchronous execution engine.
 
 ```mermaid
 sequenceDiagram
@@ -74,7 +74,7 @@ sequenceDiagram
         HC->>IA: ICU_REQUEST(Ventilator Preference)
         IA-->>HC: ICU_RESERVED / QUEUED
     end
-    Note over HC,DA: Emergency Care Completed
+    Note over HC,DA: Simulated examination ends
     HC->>DA: RESOURCE_RELEASED(Doctor Freed)
     opt ICU Bed Freed
         HC->>IA: RESOURCE_RELEASED(Bed Sanitized)
@@ -124,21 +124,24 @@ stateDiagram-v2
 ### 4. Mathematical Decision & Ranking Models
 
 #### A. Ambulance Selection Score
-Eligible ambulances ($S_{status} = \text{AVAILABLE}$) are scored as:
+Eligible ambulances must be available and contain all required equipment (P1 defaults to ALS if no requirement is supplied). Eligible ambulances are scored as:
 $$\text{Score}_{\text{amb}} = 100 - (\text{Distance}_{\text{km}} \times 5.0) + \mathbf{1}_{\{P = \text{P1} \land \text{Ventilator} \in \text{Caps}\}} \times 20.0$$
-*Candidate with the maximum score is chosen; ties broken deterministically by Ambulance ID.*
+*Maximum score wins; ties use ascending Ambulance ID. Simulated travel time is 1.5 minutes per kilometer.*
 
 #### B. Doctor Staffing Score
-Eligible physicians with specialty matching patient requirement:
-$$\text{Score}_{\text{doc}} = 100.0 - (\text{WorkloadCount} \times 10.0)$$
-*Physician with the lowest prior workload is selected to balance clinical burn-out.*
+Candidates must be available and match the requested specialty. The severity factor changes how strongly historical assignment workload is penalized:
+$$\text{Score}_{\text{doc}} = 100 - (\text{WorkloadCount} \times 10 \times \text{PriorityFactor})$$
+with factors P1=0.50, P2=0.75, P3=1.00 and P4=1.25. Highest score wins; ties use ascending Doctor ID. The priority factor affects comparative workload balancing only; it is not a clinical judgment.
 
-#### C. Waiting Queue Priority Comparison (Section 28)
+#### C. Diagnostic and ICU Selection
+Diagnostics require an exact available category match. Candidates rank by `-simulated_duration × (queue_length + 1)`, then ascending queue length, duration and resource ID. This is negative estimated completion time; higher is better. Queue length is synchronized from coordinator waiting requests. ICU beds first pass availability and required ventilator/monitoring checks, then receive a 20-point preference bonus for a ventilator-equipped bed when priority is P1; ties use ascending bed ID. Each resource agent revalidates and atomically reserves its choice, retrying one refreshed candidate ranking if the selected unit was concurrently taken.
+
+#### D. Waiting Queue Priority Comparison
 - **FIFO Strategy:** Orders waiting candidates strictly by arrival timestamp:
-  $$\text{Key}_{\text{FIFO}} = t_{\text{arrival}}$$
+    $$\text{Key}_{\text{FIFO}} = (t_{\text{request}}, \text{patient ID})$$
 - **Priority-Aware Strategy:** Orders critical life-threats first:
-  $$\text{Key}_{\text{Priority}} = (\text{PriorityWeight}(P), t_{\text{arrival}})$$
-  where $\text{PriorityWeight}(\text{P1})=1, \text{P2}=2, \text{P3}=3, \text{P4}=4$.
+    $$\text{Key}_{\text{Priority}} = (\text{AgingAdjustedPriority}, t_{\text{request}}, \text{patient ID})$$
+    Base numeric priorities are P1=1 through P4=4; priority is reduced by 0.05 per waiting minute to a floor of 1. Request time is stage-specific and stable patient ID breaks remaining ties. The same coordinator/resource-agent APIs are used by the web service and CLI.
 
 ---
 

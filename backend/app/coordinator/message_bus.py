@@ -45,9 +45,10 @@ class AgentMessageBus:
         simulation_time: float = 0.0,
         correlation_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
+        message_id: Optional[str] = None,
     ) -> AgentMessageSchema:
         """Construct, log, and route an agent message."""
-        msg_id = f"MSG-{uuid.uuid4().hex[:8].upper()}"
+        msg_id = message_id or f"MSG-{uuid.uuid4().hex[:8].upper()}"
         msg = AgentMessageSchema(
             message_id=msg_id,
             sender=sender,

@@ -76,15 +76,23 @@ def test_api_simulation_lifecycle():
 
 
 def test_api_post_emergency():
+    client.post("/api/simulation/reset", json={"preserve_scenario": True})
+    client.post("/api/simulation/start", json={"strategy": "PRIORITY_AWARE"})
+    sim_service.initialize()
     emergency_payload = {
         "id": "P999",
         "name": "Emergency Patient X",
         "age": 45,
         "gender": "Female",
+        "emergency_type": "Cardiac emergency",
+        "chief_complaint": "Chest pain",
+        "symptoms": "Sweating",
         "condition_description": "Sudden onset chest pain with diaphoresis",
         "severity_category": "Critical cardiac",
         "priority": "P1",
+        "triage_mode": "AUTO",
         "requires_ambulance": True,
+        "required_equipment": ["ALS"],
         "required_specialty": "Cardiology",
         "required_diagnostic": None,
         "requires_icu": True,
@@ -95,6 +103,21 @@ def test_api_post_emergency():
     created = response.json()
     assert created["id"] == "P999"
     assert created["priority"] == "P1"
+    assert created["emergency_type"] == "Cardiac emergency"
+    assert created["chief_complaint"] == "Chest pain"
+    assert created["required_equipment"] == ["ALS"]
+    assert created["decision_trace"]
+    assert any(step["agent"] == "TriageAgent" for step in created["decision_trace"])
+    assert any(step["agent"] == "DiagnosticAgent" and step["status"] == "SKIPPED" for step in created["decision_trace"])
+
+    trace_response = client.get("/api/patients/P999/orchestration")
+    assert trace_response.status_code == 200
+    assert trace_response.json()["orchestration_steps"]
+    sim_service.initialize()
+    persisted = next(item for item in client.get("/api/patients").json() if item["id"] == "P999")
+    assert persisted["chief_complaint"] == "Chest pain"
+    assert persisted["required_equipment"] == ["ALS"]
+    assert persisted["decision_trace"]
 
 
 def test_api_get_baseline():
@@ -105,3 +128,41 @@ def test_api_get_baseline():
     assert "workload_20" in data
     assert "FIFO" in data["workload_20"]
     assert "PRIORITY_AWARE" in data["workload_20"]
+
+
+def test_api_can_rerun_completed_cohort_and_register_emergency():
+    client.post("/api/simulation/reset", json={"preserve_scenario": True})
+
+    first_run = client.post(
+        "/api/simulation/start", json={"strategy": "PRIORITY_AWARE"}
+    )
+    second_run = client.post(
+        "/api/simulation/start", json={"strategy": "PRIORITY_AWARE"}
+    )
+
+    assert first_run.status_code == 200
+    assert first_run.json()["completed_workflows"] == 5
+    assert second_run.status_code == 200
+    assert second_run.json()["completed_workflows"] == 5
+
+    response = client.post(
+        "/api/emergency",
+        json={
+            "id": "P-RERUN-01",
+            "name": "Synthetic Repeat Run Patient",
+            "age": 40,
+            "gender": "Unknown",
+            "condition_description": "Synthetic workflow retry test",
+            "severity_category": "Moderate injury",
+            "priority": "P3",
+            "triage_mode": "AUTO",
+            "requires_ambulance": False,
+            "required_specialty": "General Medicine",
+            "required_diagnostic": None,
+            "requires_icu": False,
+            "arrival_time": 100.0,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["id"] == "P-RERUN-01"

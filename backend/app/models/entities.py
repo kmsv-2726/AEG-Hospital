@@ -13,13 +13,23 @@ class PatientModel(Base):
     age = Column(Integer, nullable=False, default=40)
     gender = Column(String(20), nullable=False, default="Unknown")
     condition_description = Column(String(255), nullable=False)
+    emergency_type = Column(String(100), nullable=True)
+    chief_complaint = Column(String(255), nullable=True)
+    symptoms = Column(Text, nullable=True)
+    heart_rate = Column(Integer, nullable=True)
+    oxygen_saturation = Column(Float, nullable=True)
+    blood_pressure = Column(String(32), nullable=True)
     severity_category = Column(String(100), nullable=False)
     priority = Column(String(10), nullable=False, default="P3")  # P1, P2, P3, P4
+    triage_mode = Column(String(20), nullable=False, default="AUTO")
+    triage_reason = Column(String(500), nullable=True)
+    triage_requires_review = Column(Boolean, nullable=False, default=False)
     workflow_state = Column(String(50), nullable=False, default="REGISTERED")
     arrival_time = Column(Float, nullable=False, default=0.0)
 
     # Resource requirements and assignments
     requires_ambulance = Column(Boolean, nullable=False, default=True)
+    required_equipment = Column(String(255), nullable=False, default="")
     assigned_ambulance_id = Column(String(50), nullable=True)
 
     required_specialty = Column(String(50), nullable=False, default="General Medicine")
@@ -29,6 +39,8 @@ class PatientModel(Base):
     assigned_diagnostic_id = Column(String(50), nullable=True)
 
     requires_icu = Column(Boolean, nullable=False, default=False)
+    required_icu_equipment = Column(String(255), nullable=False, default="")
+    requires_ventilator = Column(Boolean, nullable=False, default=False)
     assigned_icu_bed_id = Column(String(50), nullable=True)
 
     # Tracking simulation timestamps for metrics
@@ -44,6 +56,7 @@ class PatientModel(Base):
     treatment_start_time = Column(Float, nullable=True)
     completion_time = Column(Float, nullable=True)
     waiting_duration = Column(Float, nullable=False, default=0.0)
+    decision_trace_json = Column(Text, nullable=False, default="[]")
 
 
 class AmbulanceModel(Base):
@@ -95,6 +108,7 @@ class ICUBedModel(Base):
     unit_name = Column(String(100), nullable=False)
     status = Column(String(30), nullable=False, default="AVAILABLE")
     has_ventilator = Column(Boolean, nullable=False, default=True)
+    has_monitoring = Column(Boolean, nullable=False, default=True)
     current_patient_id = Column(String(50), nullable=True)
     reservation_timestamp = Column(Float, nullable=True)
     release_timestamp = Column(Float, nullable=True)

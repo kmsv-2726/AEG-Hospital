@@ -4,6 +4,7 @@ Enhanced with autonomous message processing, inboxes, and process tracking.
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
+from threading import Lock
 import uuid
 from backend.app.schemas.hospital_schemas import AgentMessageSchema, SimulationEventSchema
 from backend.app.models.enums import MessageType
@@ -30,6 +31,28 @@ class BaseAgent(ABC):
         self.inbox: List[AgentMessageSchema] = []
         self.outbox: List[AgentMessageSchema] = []
         self.message_bus: Optional[Any] = None
+        self._resource_lock = Lock()
+
+    def reserve_resource(self, resource: Dict[str, Any], patient_id: str) -> bool:
+        """Atomically reserve an available resource for one patient."""
+        with self._resource_lock:
+            if resource.get("status") != "AVAILABLE":
+                return False
+            resource["status"] = "BUSY"
+            resource["current_patient_id"] = patient_id
+            return True
+
+    def release_resource(self, resource: Dict[str, Any], patient_id: Optional[str]) -> bool:
+        """Atomically release a resource only when the patient owns it."""
+        with self._resource_lock:
+            if (
+                resource.get("status") != "BUSY"
+                or resource.get("current_patient_id") != patient_id
+            ):
+                return False
+            resource["status"] = "AVAILABLE"
+            resource["current_patient_id"] = None
+            return True
 
     def set_message_bus(self, message_bus: Any):
         """Attach message bus and register reactive listener."""
@@ -118,8 +141,9 @@ class BaseAgent(ABC):
                 patient_id=patient_id,
                 resource_id=resource_id,
                 simulation_time=simulation_time,
-                correlation_id=correlation_id,
+                correlation_id=msg.correlation_id,
                 payload=payload,
+                message_id=msg.message_id,
             )
 
         return msg
